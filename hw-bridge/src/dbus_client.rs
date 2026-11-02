@@ -3,14 +3,18 @@
 //! Not every guest image ships `dbus-send`: the older `yandexmini` rootfs has
 //! no D-Bus tools at all, and on the others a missing/spawning binary turns a
 //! working voice command into a silent failure. The bridge therefore speaks
-//! the wire protocol itself: one EXTERNAL handshake and one method call with
-//! no arguments. That is all the shairport RemoteControl interface needs.
+//! the wire protocol itself: EXTERNAL auth, the mandatory `Hello` call, then
+//! one method call with no arguments. That is all the shairport
+//! RemoteControl interface needs.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 const HEADER_SIZE: usize = 16;
+const METHOD_CALL: u8 = 1;
+const METHOD_RETURN: u8 = 2;
+const ERROR: u8 = 3;
 
 fn align_to(buf: &mut Vec<u8>, n: usize) {
     while buf.len() % n != 0 {
@@ -40,22 +44,34 @@ fn put_field(buf: &mut Vec<u8>, code: u8, signature: u8, value: &str) {
     put_string(buf, value);
 }
 
-fn build_call(destination: &str, path: &str, interface: &str, member: &str) -> Vec<u8> {
+fn build_call(
+    serial: u32,
+    destination: Option<&str>,
+    path: &str,
+    interface: &str,
+    member: &str,
+) -> Vec<u8> {
     let mut msg = Vec::with_capacity(256);
     msg.push(b'l'); // little endian
-    msg.push(1); // METHOD_CALL
+    msg.push(METHOD_CALL);
     msg.push(0); // flags
     msg.push(1); // protocol version
     msg.extend_from_slice(&0u32.to_le_bytes()); // body length, patched below
-    msg.extend_from_slice(&1u32.to_le_bytes()); // serial
+    msg.extend_from_slice(&serial.to_le_bytes());
     msg.extend_from_slice(&0u32.to_le_bytes()); // header fields length, patched below
     let fields_start = msg.len();
     put_field(&mut msg, 1, b'o', path); // PATH
     put_field(&mut msg, 2, b's', interface); // INTERFACE
     put_field(&mut msg, 3, b's', member); // MEMBER
-    put_field(&mut msg, 6, b's', destination); // DESTINATION
+    if let Some(destination) = destination {
+        put_field(&mut msg, 6, b's', destination); // DESTINATION
+    }
     let fields_len = (msg.len() - fields_start) as u32;
     msg[12..16].copy_from_slice(&fields_len.to_le_bytes());
+    // The body begins on an 8-byte boundary, and that padding is part of the
+    // message even when the body is empty. Without it dbus-daemon keeps
+    // waiting for the rest of the header and never answers.
+    align_to(&mut msg, 8);
     msg
 }
 
@@ -82,7 +98,7 @@ fn u32_at(bytes: &[u8], offset: usize, endian: u8) -> Option<u32> {
     })
 }
 
-/// Walk the reply header fields and return ERROR_NAME (code 4), so a rejected
+/// Walk reply header fields and return ERROR_NAME (code 4), so a rejected
 /// call logs e.g. `org.freedesktop.DBus.Error.ServiceUnknown` instead of a
 /// bare "failed".
 fn error_name(fields: &[u8]) -> Option<String> {
@@ -123,6 +139,69 @@ fn error_name(fields: &[u8]) -> Option<String> {
     None
 }
 
+/// Read one reply and return its message type and header payload. The bus
+/// sends NameAcquired and other signals on the same socket, so skip non-reply
+/// messages until the method return or error arrives.
+fn read_reply(stream: &mut UnixStream) -> Result<(u8, Vec<u8>), String> {
+    for _ in 0..8 {
+        let mut header = [0u8; HEADER_SIZE];
+        stream.read_exact(&mut header).map_err(|e| e.to_string())?;
+        let endian = header[0];
+        let msg_type = header[1];
+        let body_len = u32_at(&header, 4, endian).ok_or("short header")? as usize;
+        let fields_len = u32_at(&header, 12, endian).ok_or("short header")? as usize;
+        let padding = align_up(HEADER_SIZE + fields_len, 8) - (HEADER_SIZE + fields_len);
+        let rest = fields_len + padding + body_len;
+        let mut payload = vec![0u8; rest];
+        if rest > 0 {
+            stream.read_exact(&mut payload).map_err(|e| e.to_string())?;
+        }
+        match msg_type {
+            METHOD_RETURN | ERROR => return Ok((msg_type, payload)),
+            4 => continue, // SIGNAL
+            other => return Err(format!("unexpected reply type {other}")),
+        }
+    }
+    Err("no reply after 8 messages".to_string())
+}
+
+fn send_call(
+    stream: &mut UnixStream,
+    serial: u32,
+    destination: Option<&str>,
+    path: &str,
+    interface: &str,
+    member: &str,
+) -> Result<(), String> {
+    stream
+        .write_all(&build_call(serial, destination, path, interface, member))
+        .map_err(|e| e.to_string())?;
+    let (msg_type, payload) = read_reply(stream)?;
+    match msg_type {
+        METHOD_RETURN => Ok(()),
+        ERROR => Err(error_name(&payload).unwrap_or_else(|| "error reply".to_string())),
+        other => Err(format!("unexpected reply type {other}")),
+    }
+}
+
+/// The uid dbus-daemon sees through SO_PEERCRED, as the hex-encoded ASCII
+/// string EXTERNAL auth expects.
+fn hex_encoded_uid() -> String {
+    let uid = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find(|line| line.starts_with("Uid:"))
+                .and_then(|line| line.split_whitespace().nth(2)?.parse::<u32>().ok())
+        })
+        .unwrap_or(0);
+    uid.to_string()
+        .bytes()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 /// Send one method call with no arguments and wait for the reply.
 pub fn call_no_args(
     bus: &str,
@@ -135,11 +214,13 @@ pub fn call_no_args(
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
 
-    // EXTERNAL auth: the initial response is the uid as hex-encoded ASCII.
-    // The bridge runs as root in the guest, so uid 0 -> "30".
+    // EXTERNAL auth: the initial response is the connection's own uid as
+    // hex-encoded ASCII. The bridge runs as root in the guest (uid 0 -> "30"),
+    // but the same code also runs unprivileged in tests, so read it.
+    let uid = hex_encoded_uid();
     stream.write_all(b"\0").map_err(|e| e.to_string())?;
     stream
-        .write_all(b"AUTH EXTERNAL 30\r\n")
+        .write_all(format!("AUTH EXTERNAL {uid}\r\n").as_bytes())
         .map_err(|e| e.to_string())?;
     let auth = read_line(&mut stream)?;
     if !auth.starts_with("OK ") {
@@ -147,28 +228,17 @@ pub fn call_no_args(
     }
     stream.write_all(b"BEGIN\r\n").map_err(|e| e.to_string())?;
 
-    stream
-        .write_all(&build_call(destination, path, interface, member))
-        .map_err(|e| e.to_string())?;
-
-    let mut header = [0u8; HEADER_SIZE];
-    stream.read_exact(&mut header).map_err(|e| e.to_string())?;
-    let endian = header[0];
-    let msg_type = header[1];
-    let body_len = u32_at(&header, 4, endian).ok_or("short header")? as usize;
-    let fields_len = u32_at(&header, 12, endian).ok_or("short header")? as usize;
-    let padding = align_up(HEADER_SIZE + fields_len, 8) - (HEADER_SIZE + fields_len);
-    let rest = fields_len + padding + body_len;
-    let mut payload = vec![0u8; rest];
-    if rest > 0 {
-        stream.read_exact(&mut payload).map_err(|e| e.to_string())?;
-    }
-
-    match msg_type {
-        2 => Ok(()),
-        3 => Err(error_name(&payload).unwrap_or_else(|| "error reply".to_string())),
-        other => Err(format!("unexpected reply type {other}")),
-    }
+    // A bus connection has no unique name until Hello, and the bus rejects
+    // method calls from a connection that is still ":not.active.yet".
+    send_call(
+        &mut stream,
+        1,
+        Some("org.freedesktop.DBus"),
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "Hello",
+    )?;
+    send_call(&mut stream, 2, Some(destination), path, interface, member)
 }
 
 #[cfg(test)]
@@ -198,24 +268,59 @@ mod tests {
     #[test]
     fn call_has_path_interface_member_destination() {
         let msg = build_call(
-            "org.gnome.ShairportSync",
+            7,
+            Some("org.gnome.ShairportSync"),
             "/org/gnome/ShairportSync",
             "org.gnome.ShairportSync.RemoteControl",
             "Pause",
         );
         assert_eq!(msg[0], b'l');
-        assert_eq!(msg[1], 1, "METHOD_CALL");
+        assert_eq!(msg[1], METHOD_CALL);
         assert_eq!(u32_at(&msg, 4, b'l'), Some(0), "no body");
+        assert_eq!(u32_at(&msg, 8, b'l'), Some(7), "serial");
+        let fields_len = u32_at(&msg, 12, b'l').unwrap() as usize;
         assert_eq!(
-            u32_at(&msg, 12, b'l'),
-            Some((msg.len() - HEADER_SIZE) as u32),
-            "header array length"
+            align_up(HEADER_SIZE + fields_len, 8),
+            msg.len(),
+            "message padded to the body boundary"
         );
+        assert_eq!(msg.len() % 8, 0, "body starts 8-aligned");
         assert_eq!(field_codes(&msg), vec![1, 2, 3, 6]);
         let body = String::from_utf8_lossy(&msg);
         assert!(body.contains("/org/gnome/ShairportSync"));
         assert!(body.contains("org.gnome.ShairportSync.RemoteControl"));
         assert!(body.contains("Pause"));
         assert!(body.contains("org.gnome.ShairportSync"));
+    }
+
+    #[test]
+    fn hello_targets_the_bus() {
+        let msg = build_call(
+            1,
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "Hello",
+        );
+        assert_eq!(field_codes(&msg), vec![1, 2, 3, 6]);
+    }
+
+    /// Not part of the normal suite: it needs a real bus on the build host.
+    /// Run with `cargo test -p qemu-hw-bridge live_system_bus -- --ignored`.
+    /// Proves auth, Hello and the wire format against dbus-daemon, not just
+    /// against this module's own parser.
+    #[test]
+    #[ignore]
+    fn live_system_bus_call() {
+        let bus = std::env::var("TEST_DBUS_PATH")
+            .unwrap_or_else(|_| "/run/dbus/system_bus_socket".to_string());
+        call_no_args(
+            &bus,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "ListNames",
+        )
+        .expect("live bus call");
     }
 }
