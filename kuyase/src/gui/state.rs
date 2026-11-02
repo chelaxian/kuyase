@@ -980,7 +980,8 @@ impl GuiAppState {
             // TCG boots need well over half a minute before qemu-hw-bridge
             // answers; keep the retry window generous so the GUI does not
             // give up while the guest is still coming up.
-            let res = BridgeClient::connect_with_timeout(addr, Duration::from_secs(180));
+            let res =
+                BridgeClient::connect_with_timeout(addr, crate::session::bridge_connect_timeout());
             *slot.lock().unwrap() = Some(res);
             conn_flag.store(false, Ordering::SeqCst);
         });

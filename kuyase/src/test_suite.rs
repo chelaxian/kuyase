@@ -88,7 +88,10 @@ pub fn run_board_verification(
     let res = (|| -> Result<(), String> {
         // 1. Verify Duplex Bridge (:18091 -> :8091) & auto-detected Board Profile
         let bridge_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), bridge_port);
-        let bridge = BridgeClient::connect_with_timeout(bridge_addr, Duration::from_secs(25))?;
+        let bridge = BridgeClient::connect_with_timeout(
+            bridge_addr,
+            crate::session::bridge_connect_timeout(),
+        )?;
         let st = bridge.request_state()?;
         if !st.ok {
             return Err(format!("[{}] bridge state ok == false", board));
@@ -387,8 +390,20 @@ pub fn run_board_verification(
                 board, st_vol.ring_pixels
             ));
         }
+        adb.shell(
+            "mkdir -p /data/quasar && echo 12 > /data/quasar/last_vendor_volume",
+            Duration::from_secs(8),
+        )?;
+        thread::sleep(Duration::from_millis(550));
+        let st_vol_mirror = bridge.request_state()?;
+        if st_vol_mirror.volume_level != 6 || st_vol_mirror.master_volume != 6000 {
+            return Err(format!(
+                "[{}] Expected last_vendor_volume=12 to mirror into volume_level=6 (6000), got {} ({})",
+                board, st_vol_mirror.volume_level, st_vol_mirror.master_volume
+            ));
+        }
         println!(
-            "[{}] MUTE MIC red ring ([255, 0, 0]) & Volume (8/10 -> {:?}) verified!",
+            "[{}] MUTE MIC red ring ([255, 0, 0]) & Volume (8/10 -> {:?}, vendor mirror 12 -> 6/10) verified!",
             board, p0
         );
 
@@ -728,8 +743,44 @@ pub fn run_board_verification(
                 board, log_out
             ));
         }
+
+        // Verify un-hijacked voice volume command ("громкость 4") updates volume_level & vendor files after 1680ms
+        bridge.send_command(&HostCommand::InjectVoice {
+            phrase: "громкость 4".to_string(),
+            doa_angle: Some(45),
+            rms: None,
+            wake_only: false,
+        })?;
+        thread::sleep(Duration::from_millis(1800));
+        let st_voice_vol = bridge.request_state()?;
+        if st_voice_vol.volume_level != 4 || st_voice_vol.master_volume != 4000 {
+            return Err(format!(
+                "[{}] Expected volume_level=4 (4000) after voice 'громкость 4', got {} ({})",
+                board, st_voice_vol.volume_level, st_voice_vol.master_volume
+            ));
+        }
+        let vendor_files_out = adb.shell(
+            "cat /bkupgrade/data/quasar/last_vendor_volume; echo ''; cat /data/quasar/last_vendor_volume",
+            Duration::from_secs(8),
+        )?;
+        let vendor_vals: Vec<&str> = vendor_files_out
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect();
+        if vendor_vals != ["8", "8"] {
+            return Err(format!(
+                "[{}] Expected vendor volume files to equal ['8', '8'] after 'громкость 4', got {:?}",
+                board, vendor_vals
+            ));
+        }
+        bridge.send_command(&HostCommand::IpcTest {
+            cmd: "stop_tts".to_string(),
+            text: None,
+        })?;
+        thread::sleep(Duration::from_millis(100));
         println!(
-            "[{}] Voice Input -> /tmp/daemons_logs/maind.log & 1680ms Hijack Window verified!",
+            "[{}] Voice Input -> /tmp/daemons_logs/maind.log, 1680ms Hijack Window & voice volume ('громкость 4' -> 4/10) verified!",
             board
         );
 

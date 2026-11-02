@@ -10,6 +10,11 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const MAIND_LOG_PATH: &str = "/tmp/daemons_logs/maind.log";
+pub const VOLUME_FILES: [&str; 3] = [
+    "/bkupgrade/data/quasar/last_vendor_volume",
+    "/data/quasar/data/last_vendor_volume",
+    "/data/quasar/last_vendor_volume",
+];
 
 pub fn now_millis() -> u64 {
     SystemTime::now()
@@ -397,8 +402,15 @@ impl BridgeState {
             .audio_hw
             .on_volume_or_mute_changed(clamped, self.mics_muted.load(Ordering::Relaxed));
         let raw_vol = clamped * 1000;
+        let vendor_vol = (clamped * 2).to_string();
         let _ = fs::create_dir_all("/bkupgrade/data/quasar");
-        let _ = fs::write("/bkupgrade/data/quasar/last_vendor_volume", raw_vol.to_string());
+        for path in VOLUME_FILES {
+            if let Some(parent) = Path::new(path).parent() {
+                if parent.is_dir() {
+                    let _ = fs::write(path, &vendor_vol);
+                }
+            }
+        }
         self.append_maind_log(&format!("[sdk] onVolumeChanged: volume={}", clamped));
         self.log(format!(
             "Volume changed -> {}/10 (master_volume={}, LED volume.led arc active)",
@@ -430,45 +442,41 @@ impl BridgeState {
 }
 
 /// Mirror the vendor volume that Quasar (or the emulator's Go stand-in)
-/// writes to `last_vendor_volume` into the twin state.
+/// writes to `last_vendor_volume` into the Hardware Bridge state.
 ///
-/// The GUI used to learn the volume only from host-injected commands, so a
-/// phone slider or the station buttons moved ALSA but left "Громк N/10"
-/// frozen. set_volume_level() also paints the volume arc on the ring, which
-/// is what the real Quasar does on a volume change.
+/// The Virtual Speaker Twin used to learn the volume only from host-injected
+/// commands, so a phone slider or the station buttons moved ALSA but left
+/// "Громк N/10" frozen. `set_volume_level()` also paints the volume arc on the
+/// LED Ring, which is what the real Quasar does on a volume change.
 pub fn spawn_volume_file_watcher(state: std::sync::Arc<BridgeState>) {
     std::thread::spawn(move || {
-        const FILES: [&str; 3] = [
-            "/bkupgrade/data/quasar/last_vendor_volume",
-            "/data/quasar/data/last_vendor_volume",
-            "/data/quasar/last_vendor_volume",
-        ];
-        let mut last_raw: Option<u32> = None;
+        let mut last_seen: [Option<(u32, SystemTime)>; 3] = [None; 3];
         loop {
-            let mut newest: Option<(u32, SystemTime)> = None;
-            for path in FILES {
+            let mut changed: Option<(u32, SystemTime)> = None;
+            for (idx, path) in VOLUME_FILES.iter().enumerate() {
                 let Ok(meta) = fs::metadata(path) else { continue };
                 let Ok(raw) = fs::read_to_string(path) else { continue };
                 let Ok(value) = raw.trim().parse::<u32>() else { continue };
                 let mtime = meta.modified().unwrap_or(UNIX_EPOCH);
-                if newest.map(|(_, t)| mtime > t).unwrap_or(true) {
-                    newest = Some((value, mtime));
+                let cur = (value, mtime);
+                if last_seen[idx] != Some(cur) {
+                    last_seen[idx] = Some(cur);
+                    if changed.map(|(_, t)| mtime >= t).unwrap_or(true) {
+                        changed = Some(cur);
+                    }
                 }
             }
-            if let Some((raw, _)) = newest {
-                if last_raw != Some(raw) {
-                    last_raw = Some(raw);
-                    // Quasar stores last_vendor_volume as percent/5 (0..20);
-                    // some paths use percent; the twin writes master_volume
-                    // (level * 1000). The GUI slider is the 0..10 station level.
-                    let level = match raw {
-                        0..=20 => (raw + 1) / 2,
-                        21..=100 => (raw + 5) / 10,
-                        _ => raw / 1000,
-                    };
-                    if level != state.volume_level.load(Ordering::Relaxed) {
-                        state.set_volume_level(level);
-                    }
+            if let Some((raw, _)) = changed {
+                // Quasar and Hardware Bridge store last_vendor_volume as
+                // percent/5 (0..20); fallback branches cover raw percent
+                // (21..100) and legacy master_volume (level * 1000).
+                let level = match raw {
+                    0..=20 => (raw + 1) / 2,
+                    21..=100 => (raw + 5) / 10,
+                    _ => (raw / 1000).min(10),
+                };
+                if level != state.volume_level.load(Ordering::Relaxed) {
+                    state.set_volume_level(level);
                 }
             }
             std::thread::sleep(Duration::from_millis(400));

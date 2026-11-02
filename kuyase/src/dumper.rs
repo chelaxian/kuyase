@@ -31,12 +31,28 @@ pub struct DumpResult {
 
 pub fn detect_board_slug_from_probe(dev_type_cfg: &str, model_raw: &str) -> String {
     let model_lc = model_raw.to_ascii_lowercase();
+    let model_compact: String = model_lc.chars().filter(|c| !c.is_whitespace()).collect();
     if model_lc.contains("prune") {
         return "plumnc".to_string();
     }
 
+    // Disambiguate "Midi" by SoC / DT compatible before relying on `deviceType`:
+    // - Retail Station Midi is `cucumber` on Amlogic A5 (`amlogic,a5` / `yandex,cucumber`)
+    // - Retail Station 2 has internal DT name `yandex,station-midi` on Amlogic AXG (`amlogic,axg`)
+    if model_lc.contains("cucumber") {
+        return "cucumber".to_string();
+    }
+    if model_lc.contains("station-midi") && model_compact.contains("amlogic,axg") {
+        return "station2".to_string();
+    }
+
     let dev = dev_type_cfg.trim();
     if !dev.is_empty() && !dev.eq_ignore_ascii_case("unknown") {
+        if (dev.eq_ignore_ascii_case("yandexmidi") || dev.eq_ignore_ascii_case("midi"))
+            && model_compact.contains("amlogic,a5")
+        {
+            return "cucumber".to_string();
+        }
         return normalize_board_slug(dev);
     }
 
@@ -286,8 +302,16 @@ mod tests {
             "plum"
         );
         assert_eq!(
-            detect_board_slug_from_probe("yandexmidi", "yandex,station-midi"),
+            detect_board_slug_from_probe("yandexmidi", "yandex,station-midi amlogic, axg"),
             "station2"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("yandexmidi", "yandex,cucumber-dvt2 amlogic, a5"),
+            "cucumber"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("cucumber", "yandex,cucumber-dvt2 yandex,cucumber amlogic, a5"),
+            "cucumber"
         );
         assert_eq!(
             detect_board_slug_from_probe("station3", "yandex,orion"),

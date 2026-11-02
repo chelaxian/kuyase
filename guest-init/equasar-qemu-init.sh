@@ -114,7 +114,13 @@ if [ "$BOARD" = "auto" ] || [ -z "$BOARD" ]; then
         BOARD="plum"
       fi
       ;;
-    station_2|station-midi|yandexmidi) BOARD="station2" ;;
+    station_2|station-midi|yandexmidi)
+      if [ -e /boot/yandex-cucumber-i2ctop-overlay.dtb ]; then
+        BOARD="cucumber"
+      else
+        BOARD="station2"
+      fi
+      ;;
     "")
       if [ -e /lib/firmware/bergamot-acm8625.cfg ]; then
         BOARD="bergamot"
@@ -149,8 +155,17 @@ esac
 export QUASAR_BOARD="$BOARD"
 hostname "qemu-${BOARD}" 2>/dev/null || true
 
-# 2. Ensure loopback is up (eth0 is configured via kernel `ip=dhcp`)
+# 2. Ensure loopback is up (eth0 is configured via kernel `ip=dhcp`) and DNS resolver is configured
 ip link set lo up 2>/dev/null || ifconfig lo 127.0.0.1 up 2>/dev/null || true
+if ! grep -q '^nameserver ' /etc/resolv.conf 2>/dev/null; then
+  cat > /tmp/resolv.conf << 'EOF'
+nameserver 10.0.2.3
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
+  rm -f /etc/resolv.conf 2>/dev/null || true
+  cp -f /tmp/resolv.conf /etc/resolv.conf 2>/dev/null || ln -sfn /tmp/resolv.conf /etc/resolv.conf 2>/dev/null || true
+fi
 
 # 2b. Optional LAN NIC. When the host passes a second virtio NIC (52:4b:59:xx,
 # a tap on a dedicated bridge) the speaker lives directly on the physical LAN,
@@ -225,7 +240,8 @@ mkdir -p /tmp/fake-dt /sys/devices/virtual/dmi/id /sys/firmware/devicetree
 case "$BOARD" in
   cucumber)
     printf "Yandex Cucumber DVT2\0" > /tmp/fake-dt/model
-    printf "yandex,cucumber-dvt2\0amlogic,a5\0" > /tmp/fake-dt/compatible
+    printf "yandex,cucumber-dvt2\0yandex,cucumber\0amlogic, a5\0" > /tmp/fake-dt/compatible
+    printf "a5_cucumber_dvt2\0" > /tmp/fake-dt/amlogic-dt-id
     BOARD_NAME="Яндекс Станция Миди (YNDX-00054 / cucumber)"
     SYSFS_PREFIX="cucumber"; RING_LEDS=24; LOGO_LEDS=6; AMBILIGHT_LEDS=0; HAS_CLOCK="true"; LED_DRIVER="framebuffer"
     ;;
@@ -282,7 +298,7 @@ case "$BOARD" in
     ;;
   station2)
     printf "Yandex Station Midi\0" > /tmp/fake-dt/model
-    printf "yandex,station-midi\0amlogic,axg\0" > /tmp/fake-dt/compatible
+    printf "yandex,station-midi\0amlogic, axg\0" > /tmp/fake-dt/compatible
     BOARD_NAME="Яндекс Станция 2 (YNDX-00051 / station-midi)"
     SYSFS_PREFIX="station2"; RING_LEDS=88; LOGO_LEDS=0; AMBILIGHT_LEDS=0; HAS_CLOCK="false"; LED_DRIVER="framebuffer"
     ;;
@@ -379,9 +395,17 @@ else
   echo "ring" > /sys/class/graphics/fb0/name
   echo "YNDX LED screen" > /sys/class/graphics/fb1/name
   case "$BOARD" in
-    station2) write_fb_geom fb0 89 1 24 ;;
-    cucumber) write_fb_geom fb0 30 ;;
-    bergamot) write_fb_geom fb0 6 1 24 ;;
+    station2)
+      write_fb_geom fb0 89 1 24
+      ;;
+    cucumber)
+      echo "logo" > /sys/class/graphics/fb1/name
+      write_fb_geom fb0 24 1 24
+      write_fb_geom fb1 6 1 24
+      ;;
+    bergamot)
+      write_fb_geom fb0 6 1 24
+      ;;
   esac
   echo 255 > /sys/class/backlight/fb0/brightness
   echo 255 > /sys/class/backlight/fb1/brightness
@@ -440,6 +464,14 @@ if [ "$LED_DRIVER" != "i2c_sn3236" ]; then
         echo 255 > "$d/max_brightness"
         echo "[ledfb-${bus}-sync] none" > "$d/trigger"
       done
+    done
+  elif [ "$BOARD" = "cucumber" ]; then
+    for snode in "logo:sync" "ringA:sync" "ringB:sync" "sync:clock-0" "sync:clock-1"; do
+      d="/sys/class/leds/cucumber:${snode}"
+      mkdir -p "$d"
+      echo 0 > "$d/brightness"
+      echo 255 > "$d/max_brightness"
+      echo "none" > "$d/trigger"
     done
   fi
 

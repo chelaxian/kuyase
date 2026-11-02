@@ -3,7 +3,10 @@ use kuyase::bridge_client::BridgeClient;
 use kuyase::dumper::dump_from_adb;
 use kuyase::gui::run_gui;
 use kuyase::image_builder::prepare_images;
-use kuyase::session::{discover_guest_images, resolve_repo_root, EmulatorSession, SessionConfig};
+use kuyase::session::{
+    bridge_connect_timeout, discover_guest_images, resolve_repo_root, EmulatorSession,
+    SessionConfig,
+};
 use kuyase::test_suite::run_multi_board_tests;
 use serde_json::Value;
 use std::env;
@@ -286,7 +289,7 @@ fn run_single_headless_board(
 
     let result = (|| -> Result<(), String> {
         let bridge_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), cfg.bridge_port);
-        let bridge = BridgeClient::connect_with_timeout(bridge_addr, Duration::from_secs(25))?;
+        let bridge = BridgeClient::connect_with_timeout(bridge_addr, bridge_connect_timeout())?;
 
         let initial_state = bridge.latest_state();
         let refreshed_state = bridge.request_state()?;

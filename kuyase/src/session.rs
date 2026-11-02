@@ -11,6 +11,15 @@ use std::time::{Duration, Instant, SystemTime};
 
 pub const EMBEDDED_HW_BRIDGE: &[u8] = include_bytes!("../../guest-init/bin/qemu-hw-bridge");
 
+pub fn bridge_connect_timeout() -> Duration {
+    let secs = env::var("KUYASE_BOOT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(180);
+    Duration::from_secs(secs)
+}
+
 pub fn resolve_repo_root() -> PathBuf {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     for ancestor in cwd.ancestors().take(4) {
@@ -510,13 +519,16 @@ impl EmulatorSession {
 
         // TCG bench: the guest needs real parallelism (Luna + plugin + audio).
         // 4 vCPUs on the 8-thread host is the sweet spot; override if needed.
-        let smp = std::env::var("KUYASE_SMP").unwrap_or_else(|_| {
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(2)
-                .clamp(2, 4)
-                .to_string()
-        });
+        let host_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(2)
+            .max(1);
+        let smp = std::env::var("KUYASE_SMP")
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .map(|n| n.clamp(1, host_threads))
+            .unwrap_or_else(|| host_threads.clamp(2, 4))
+            .to_string();
         let mem = std::env::var("KUYASE_MEM").unwrap_or_else(|_| "1G".to_string());
         let mut cmd = Command::new(&qemu_bin);
         cmd.args([
