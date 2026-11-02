@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const MAIND_LOG_PATH: &str = "/tmp/daemons_logs/maind.log";
 
@@ -427,4 +427,51 @@ impl BridgeState {
             let _ = writeln!(f, "{}", line);
         }
     }
+}
+
+/// Mirror the vendor volume that Quasar (or the emulator's Go stand-in)
+/// writes to `last_vendor_volume` into the twin state.
+///
+/// The GUI used to learn the volume only from host-injected commands, so a
+/// phone slider or the station buttons moved ALSA but left "Громк N/10"
+/// frozen. set_volume_level() also paints the volume arc on the ring, which
+/// is what the real Quasar does on a volume change.
+pub fn spawn_volume_file_watcher(state: std::sync::Arc<BridgeState>) {
+    std::thread::spawn(move || {
+        const FILES: [&str; 3] = [
+            "/bkupgrade/data/quasar/last_vendor_volume",
+            "/data/quasar/data/last_vendor_volume",
+            "/data/quasar/last_vendor_volume",
+        ];
+        let mut last_raw: Option<u32> = None;
+        loop {
+            let mut newest: Option<(u32, SystemTime)> = None;
+            for path in FILES {
+                let Ok(meta) = fs::metadata(path) else { continue };
+                let Ok(raw) = fs::read_to_string(path) else { continue };
+                let Ok(value) = raw.trim().parse::<u32>() else { continue };
+                let mtime = meta.modified().unwrap_or(UNIX_EPOCH);
+                if newest.map(|(_, t)| mtime > t).unwrap_or(true) {
+                    newest = Some((value, mtime));
+                }
+            }
+            if let Some((raw, _)) = newest {
+                if last_raw != Some(raw) {
+                    last_raw = Some(raw);
+                    // Quasar stores last_vendor_volume as percent/5 (0..20);
+                    // some paths use percent; the twin writes master_volume
+                    // (level * 1000). The GUI slider is the 0..10 station level.
+                    let level = match raw {
+                        0..=20 => (raw + 1) / 2,
+                        21..=100 => (raw + 5) / 10,
+                        _ => raw / 1000,
+                    };
+                    if level != state.volume_level.load(Ordering::Relaxed) {
+                        state.set_volume_level(level);
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(400));
+        }
+    });
 }

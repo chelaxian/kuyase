@@ -52,6 +52,53 @@ fn parse_phrase_volume(phrase: &str) -> Option<u32> {
     None
 }
 
+fn push_volume_to_stub(level: u32) {
+    // Only the KUYASE bench listens on 9925 (emu-quasar-volume). A stock unit
+    // has no endpoint there, so the connect simply fails and is ignored.
+    let percent = level.min(10) * 10;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 9925));
+    let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(150)) else {
+        return;
+    };
+    let _ = s.set_write_timeout(Some(Duration::from_millis(400)));
+    let req = format!(
+        "POST /set?percent={} HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n",
+        percent
+    );
+    let _ = s.write_all(req.as_bytes());
+}
+
+fn parse_phrase_transport(phrase: &str) -> Option<&'static str> {
+    let p = phrase.to_lowercase();
+    if p.contains("пауз") || p.contains("pause") || p.contains("стоп") || p.contains("останов") {
+        Some("Pause")
+    } else if p.contains("продолж")
+        || p.contains("resume")
+        || p.contains("играй")
+        || p.contains("плей")
+        || p.contains("play")
+    {
+        Some("Play")
+    } else if p.contains("дальше") || p.contains("следующ") || p.contains("next") {
+        Some("Next")
+    } else if p.contains("назад") || p.contains("предыдущ") || p.contains("previous") {
+        Some("Previous")
+    } else {
+        None
+    }
+}
+
+fn send_airplay_transport(command: &str) {
+    // Same D-Bus call the station-airplay plugin's Alice button uses.
+    let method = format!("org.gnome.ShairportSync.RemoteControl.{command}");
+    let _ = Command::new("dbus-send")
+        .arg("--bus=unix:path=/run/station-airplay/private-bus")
+        .arg("--dest=org.gnome.ShairportSync")
+        .arg("/org/gnome/ShairportSync")
+        .arg(method)
+        .status();
+}
+
 fn send_local_aliced_packet(payload: &[u8]) -> bool {
     let Ok(mut s) = TcpStream::connect("127.0.0.1:9875") else {
         return false;
@@ -184,11 +231,15 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
                 }
                 "volume_up" => {
                     let cur = state.volume_level.load(Ordering::Relaxed);
-                    state.set_volume_level((cur + 1).min(10));
+                    let next = (cur + 1).min(10);
+                    state.set_volume_level(next);
+                    push_volume_to_stub(next);
                 }
                 "volume_down" => {
                     let cur = state.volume_level.load(Ordering::Relaxed);
-                    state.set_volume_level(cur.saturating_sub(1));
+                    let next = cur.saturating_sub(1);
+                    state.set_volume_level(next);
+                    push_volume_to_stub(next);
                 }
                 _ => {
                     state.log(format!("Inject button: {} ({})", btn, act));
@@ -242,6 +293,7 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
         }
         HostCommand::SetVolume { volume_level } => {
             state.set_volume_level(volume_level);
+            push_volume_to_stub(volume_level);
             GuestPacket::CommandAck {
                 ok: true,
                 error: None,
@@ -479,6 +531,7 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
             let has_phrase = !wake_only && !phrase_clean.is_empty();
             let phrase_for_tts = phrase_clean.clone();
             let parsed_vol = parse_phrase_volume(&phrase_clean);
+            let parsed_transport = parse_phrase_transport(&phrase_clean);
             thread::spawn(move || {
                 thread::sleep(Duration::from_millis(650));
                 st.mic_burst_active.store(false, Ordering::SeqCst);
@@ -493,6 +546,11 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
                     {
                         if let Some(v) = parsed_vol {
                             st.set_volume_level(v);
+                            push_volume_to_stub(v);
+                        }
+                        if let Some(cmd) = parsed_transport {
+                            st.log(format!("Voice transport -> AirPlay {}", cmd));
+                            send_airplay_transport(cmd);
                         }
                         let auto_reply = format!("Выполняю: {}", phrase_for_tts);
                         *st.last_spoken_text.lock().unwrap() = auto_reply.clone();

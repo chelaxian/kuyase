@@ -508,6 +508,16 @@ impl EmulatorSession {
             format!("file={},if=virtio,format=raw", config.drive_img.display())
         };
 
+        // TCG bench: the guest needs real parallelism (Luna + plugin + audio).
+        // 4 vCPUs on the 8-thread host is the sweet spot; override if needed.
+        let smp = std::env::var("KUYASE_SMP").unwrap_or_else(|_| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(2)
+                .clamp(2, 4)
+                .to_string()
+        });
+        let mem = std::env::var("KUYASE_MEM").unwrap_or_else(|_| "1G".to_string());
         let mut cmd = Command::new(&qemu_bin);
         cmd.args([
             "-M",
@@ -515,9 +525,9 @@ impl EmulatorSession {
             "-cpu",
             "cortex-a53",
             "-smp",
-            "2",
+            smp.as_str(),
             "-m",
-            "512M",
+            mem.as_str(),
             "-kernel",
         ])
         .arg(&kernel_img)
