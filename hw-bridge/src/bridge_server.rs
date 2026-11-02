@@ -1,5 +1,6 @@
 use crate::audio::{play_expressive_tts_to_alsa, play_synthetic_tone_to_alsa};
 use crate::input::emit_compat_input_event;
+use crate::ipc::{broadcast_alice_speech, speech_subscribers};
 use crate::proto::push_len_delimited;
 use crate::state::{AliceState, BridgeState, MAIND_LOG_PATH};
 use protocol::{
@@ -527,6 +528,24 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
                 ));
             }
 
+            // A recognised phrase is what triggers the station's own command
+            // path: aliced event -> Luna /speech/next -> station-airplay. The
+            // emulator has no recogniser, so publish the frame ourselves.
+            if !wake_only && !phrase_clean.is_empty() {
+                let request_id = format!("emu-{seq}");
+                let transcript = phrase_clean.clone();
+                let st_event = state.clone();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(300));
+                    broadcast_alice_speech(&transcript, &request_id);
+                    st_event.log(format!(
+                        "Voice recognition -> aliced event request_id={} ({} subscriber(s))",
+                        request_id,
+                        speech_subscribers()
+                    ));
+                });
+            }
+
             let st = state.clone();
             let has_phrase = !wake_only && !phrase_clean.is_empty();
             let phrase_for_tts = phrase_clean.clone();
@@ -549,8 +568,21 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
                             push_volume_to_stub(v);
                         }
                         if let Some(cmd) = parsed_transport {
-                            st.log(format!("Voice transport -> AirPlay {}", cmd));
-                            send_airplay_transport(cmd);
+                            if speech_subscribers() == 0 {
+                                // No Luna plugin is reading aliced events (stock
+                                // image or AirPlay stopped): fall back to the
+                                // direct D-Bus call the bench used before.
+                                st.log(format!(
+                                    "Voice transport -> AirPlay {} (direct, no aliced subscriber)",
+                                    cmd
+                                ));
+                                send_airplay_transport(cmd);
+                            } else {
+                                st.log(format!(
+                                    "Voice transport -> AirPlay {} (via aliced -> Luna -> plugin)",
+                                    cmd
+                                ));
+                            }
                         }
                         let auto_reply = format!("Выполняю: {}", phrase_for_tts);
                         *st.last_spoken_text.lock().unwrap() = auto_reply.clone();

@@ -19,6 +19,52 @@ pub fn push_len_delimited(buf: &mut Vec<u8>, field_num: u32, payload: &[u8]) {
     buf.extend_from_slice(payload);
 }
 
+/// QuasarMessage{3: AliceState{2: transcript, 7: request_id, 15: {2: final}}}
+/// is what a real aliced publishes when the station recognises a phrase. Luna
+/// turns it into `/speech/next` events and the AirPlay plugin executes the
+/// transport command. The emulator has no recogniser, so an injected phrase is
+/// rendered into the same message.
+pub fn build_alice_state_event(
+    phase: Option<u64>,
+    transcript: &str,
+    request_id: &str,
+    final_flag: bool,
+) -> Vec<u8> {
+    let mut state = Vec::new();
+    if let Some(phase) = phase {
+        push_varint(&mut state, 1 << 3);
+        push_varint(&mut state, phase);
+    }
+    if !transcript.is_empty() {
+        push_len_delimited(&mut state, 2, transcript.as_bytes());
+    }
+    if !request_id.is_empty() {
+        push_len_delimited(&mut state, 7, request_id.as_bytes());
+    }
+    if final_flag {
+        let mut request = Vec::new();
+        push_varint(&mut request, 2 << 3);
+        push_varint(&mut request, 1);
+        push_len_delimited(&mut state, 15, &request);
+    }
+
+    let mut message = Vec::new();
+    push_len_delimited(&mut message, 3, &state);
+    message
+}
+
+/// The recognition result for a phrase. Sent after a `listening` frame: aliced
+/// replays retained state on a fresh IPC connection, and Luna marks that first
+/// frame as an initial snapshot, which the AirPlay plugin deliberately ignores.
+pub fn build_alice_voice_event(transcript: &str, request_id: &str) -> Vec<u8> {
+    build_alice_state_event(None, transcript, request_id, true)
+}
+
+/// AliceState phase 1 = LISTENING, the frame that precedes a recognition.
+pub fn build_alice_listening_event() -> Vec<u8> {
+    build_alice_state_event(Some(1), "", "", false)
+}
+
 pub fn build_yio_audio_frame(doa_deg: f32, target_rms: u16, seq: u64) -> Vec<u8> {
     let n_samples = 256usize;
     let mut base_samples = vec![0i16; n_samples + 16];
