@@ -13,6 +13,8 @@ use tar::{Archive, Builder, EntryType, Header};
 
 pub const EMBEDDED_INIT_SH: &[u8] = include_bytes!("../../guest-init/equasar-qemu-init.sh");
 pub const EMBEDDED_S99_YAM: &[u8] = include_bytes!("../../guest-init/S99kuyase-yam");
+pub const EMBEDDED_DBUS_BENCH_CONFIG: &[u8] =
+    include_bytes!("../../guest-init/zz-kuyase-bench.conf");
 pub const DEFAULT_DATA_IMAGE_SIZE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -611,6 +613,8 @@ pub fn inject_guest_files(root: &Path, tree: &mut RootfsTree) -> Result<(), Stri
     tree.insert_dir("usr/local/bin", 0o755);
     tree.insert_dir("etc", 0o755);
     tree.insert_dir("etc/init.d", 0o755);
+    tree.insert_dir("etc/dbus-1", 0o755);
+    tree.insert_dir("etc/dbus-1/system.d", 0o755);
 
     let init_path = root.join("guest-init").join("equasar-qemu-init.sh");
     let raw_init = if init_path.is_file() {
@@ -629,6 +633,23 @@ pub fn inject_guest_files(root: &Path, tree: &mut RootfsTree) -> Result<(), Stri
         normalize_crlf_to_lf(EMBEDDED_S99_YAM)
     };
     tree.insert_file("etc/init.d/S99kuyase-yam", raw_s99_yam, 0o755);
+
+    // The legacy Midi/Station 3 renderer registers shairport on the system
+    // bus, whose stock policy denies name ownership to every connection.
+    // Without this the receiver starts but sender transport and voice have
+    // nowhere to go.
+    let dbus_policy_path = root.join("guest-init").join("zz-kuyase-bench.conf");
+    let raw_dbus_policy = if dbus_policy_path.is_file() {
+        let b = fs::read(&dbus_policy_path).map_err(|e| e.to_string())?;
+        normalize_crlf_to_lf(&b)
+    } else {
+        normalize_crlf_to_lf(EMBEDDED_DBUS_BENCH_CONFIG)
+    };
+    tree.insert_file(
+        "etc/dbus-1/system.d/zz-kuyase-bench.conf",
+        raw_dbus_policy,
+        0o644,
+    );
 
     let bridge_bytes = match resolve_bridge_binary(root) {
         Ok(p) => fs::read(&p).map_err(|e| e.to_string())?,
@@ -966,6 +987,16 @@ mod tests {
         let s99_yam_bytes = readback.get_file_bytes("etc/init.d/S99kuyase-yam").unwrap();
         assert!(!s99_yam_bytes.contains(&b'\r'));
         assert!(String::from_utf8_lossy(s99_yam_bytes).contains("/data/yam/bin/luna"));
+
+        let dbus_policy_node = readback
+            .get("etc/dbus-1/system.d/zz-kuyase-bench.conf")
+            .unwrap();
+        assert_eq!(dbus_policy_node.mode, 0o644);
+        let dbus_policy_bytes = readback
+            .get_file_bytes("etc/dbus-1/system.d/zz-kuyase-bench.conf")
+            .unwrap();
+        assert!(!dbus_policy_bytes.contains(&b'\r'));
+        assert!(String::from_utf8_lossy(dbus_policy_bytes).contains("allow own=\"*\""));
 
         let bridge_node = readback.get("usr/local/bin/qemu-hw-bridge").unwrap();
         assert_eq!(bridge_node.mode, 0o755);
