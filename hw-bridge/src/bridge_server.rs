@@ -595,6 +595,14 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
                                 cmd, how, result
                             ));
                         }
+                        if parsed_transport.is_some() {
+                            // Transport commands are silent on a real station:
+                            // the command spotter acts and Alice says nothing.
+                            st.log("Dialog Hijack window (1680ms) expired without CANCEL_DIALOG -> transport handled silently");
+                            st.set_alice_state(AliceState::Idle);
+                            st.append_maind_log("[sdk] onAliceStateChanged: IDLE");
+                            return;
+                        }
                         let auto_reply = format!("Выполняю: {}", phrase_for_tts);
                         *st.last_spoken_text.lock().unwrap() = auto_reply.clone();
                         st.set_alice_state(AliceState::Speaking);
