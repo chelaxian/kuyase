@@ -89,15 +89,26 @@ fn parse_phrase_transport(phrase: &str) -> Option<&'static str> {
     }
 }
 
-fn send_airplay_transport(command: &str) {
+fn send_airplay_transport(command: &str) -> String {
     // Same D-Bus call the station-airplay plugin's Alice button uses.
+    // --print-reply is mandatory: without it dbus-send disconnects before the
+    // call is delivered and the transport command silently does nothing.
     let method = format!("org.gnome.ShairportSync.RemoteControl.{command}");
-    let _ = Command::new("dbus-send")
+    match Command::new("dbus-send")
         .arg("--bus=unix:path=/run/station-airplay/private-bus")
+        .arg("--print-reply")
         .arg("--dest=org.gnome.ShairportSync")
         .arg("/org/gnome/ShairportSync")
         .arg(method)
-        .status();
+        .output()
+    {
+        Ok(out) if out.status.success() => "ok".to_string(),
+        Ok(out) => format!(
+            "dbus-send failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(error) => format!("dbus-send failed: {error}"),
+    }
 }
 
 fn send_local_aliced_packet(payload: &[u8]) -> bool {
@@ -568,21 +579,21 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
                             push_volume_to_stub(v);
                         }
                         if let Some(cmd) = parsed_transport {
-                            if speech_subscribers() == 0 {
-                                // No Luna plugin is reading aliced events (stock
-                                // image or AirPlay stopped): fall back to the
-                                // direct D-Bus call the bench used before.
-                                st.log(format!(
-                                    "Voice transport -> AirPlay {} (direct, no aliced subscriber)",
-                                    cmd
-                                ));
-                                send_airplay_transport(cmd);
+                            // The plugin only executes after Luna hands it the
+                            // aliced event, and on the bench Luna's runtime API
+                            // can stall under TCG. If the plugin did not claim
+                            // the dialog (this branch only runs when it did
+                            // not), send the same D-Bus call it would have sent.
+                            let how = if speech_subscribers() == 0 {
+                                "direct, no aliced subscriber"
                             } else {
-                                st.log(format!(
-                                    "Voice transport -> AirPlay {} (via aliced -> Luna -> plugin)",
-                                    cmd
-                                ));
-                            }
+                                "direct, plugin did not claim"
+                            };
+                            let result = send_airplay_transport(cmd);
+                            st.log(format!(
+                                "Voice transport -> AirPlay {} ({}, dbus-send -> {})",
+                                cmd, how, result
+                            ));
                         }
                         let auto_reply = format!("Выполняю: {}", phrase_for_tts);
                         *st.last_spoken_text.lock().unwrap() = auto_reply.clone();
