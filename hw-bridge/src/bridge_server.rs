@@ -90,25 +90,54 @@ fn parse_phrase_transport(phrase: &str) -> Option<&'static str> {
 }
 
 fn send_airplay_transport(command: &str) -> String {
-    // Same D-Bus call the station-airplay plugin's Alice button uses.
-    // --print-reply is mandatory: without it dbus-send disconnects before the
-    // call is delivered and the transport command silently does nothing.
-    let method = format!("org.gnome.ShairportSync.RemoteControl.{command}");
-    match Command::new("dbus-send")
-        .arg("--bus=unix:path=/run/station-airplay/private-bus")
-        .arg("--print-reply")
-        .arg("--dest=org.gnome.ShairportSync")
-        .arg("/org/gnome/ShairportSync")
-        .arg(method)
-        .output()
-    {
-        Ok(out) if out.status.success() => "ok".to_string(),
-        Ok(out) => format!(
-            "dbus-send failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ),
-        Err(error) => format!("dbus-send failed: {error}"),
+    // Same D-Bus call the station-airplay plugin's Alice button uses. Talk to
+    // the bus directly: the older yandexmini rootfs has no dbus-send at all.
+    //
+    // Two buses matter on the bench. Shared-controls profiles publish the
+    // receiver on the plugin's private bus. The legacy Midi renderer has no
+    // private bus and registers on the system bus instead, so try both. A
+    // successful call returns immediately; a failure on the first bus is
+    // expected on the legacy profile.
+    let interface = "org.gnome.ShairportSync.RemoteControl";
+    let buses = [
+        "/run/station-airplay/private-bus",
+        "/run/dbus/system_bus_socket",
+    ];
+    let mut errors: Vec<String> = Vec::new();
+    for bus in buses {
+        match crate::dbus_client::call_no_args(
+            bus,
+            "org.gnome.ShairportSync",
+            "/org/gnome/ShairportSync",
+            interface,
+            command,
+        ) {
+            Ok(()) => return format!("ok (native, {bus})"),
+            Err(error) => errors.push(format!("{bus}: {error}")),
+        }
     }
+
+    // Last resort: dbus-send, where the firmware ships it.
+    let method = format!("{interface}.{command}");
+    for bus in buses {
+        let address = format!("--bus=unix:path={bus}");
+        match Command::new("dbus-send")
+            .arg(&address)
+            .arg("--print-reply")
+            .arg("--dest=org.gnome.ShairportSync")
+            .arg("/org/gnome/ShairportSync")
+            .arg(&method)
+            .output()
+        {
+            Ok(out) if out.status.success() => return format!("ok (dbus-send, {bus})"),
+            Ok(out) => errors.push(format!(
+                "dbus-send {bus}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )),
+            Err(error) => errors.push(format!("dbus-send {bus}: {error}")),
+        }
+    }
+    errors.join("; ")
 }
 
 fn send_local_aliced_packet(payload: &[u8]) -> bool {
@@ -591,7 +620,7 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
                             };
                             let result = send_airplay_transport(cmd);
                             st.log(format!(
-                                "Voice transport -> AirPlay {} ({}, dbus-send -> {})",
+                                "Voice transport -> AirPlay {} ({}, transport -> {})",
                                 cmd, how, result
                             ));
                         }
