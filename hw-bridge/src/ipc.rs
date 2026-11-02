@@ -79,16 +79,49 @@ fn broadcast_frame(frame: Vec<u8>) {
     clients.retain_mut(|client| client.write_all(&frame).is_ok());
 }
 
-pub fn broadcast_alice_speech(transcript: &str, request_id: &str) {
-    // LISTENING and the recognition travel in one write: Luna marks the first
-    // frame of a fresh IPC connection as replayed state (initial snapshot) and
-    // the plugin ignores those, so the recognition must not be that frame.
+/// The last recognised phrase, kept briefly so a reader that reconnects right
+/// after the injection still sees it. Luna's reader drops its IPC stream on
+/// every error, so a publish that lands between two polls used to be lost.
+struct PendingSpeech {
+    transcript: String,
+    request_id: String,
+    at: std::time::Instant,
+}
+
+static PENDING_SPEECH: OnceLock<Mutex<Option<PendingSpeech>>> = OnceLock::new();
+const PENDING_TTL: Duration = Duration::from_secs(5);
+
+fn pending_speech() -> &'static Mutex<Option<PendingSpeech>> {
+    PENDING_SPEECH.get_or_init(|| Mutex::new(None))
+}
+
+fn fresh_pending() -> Option<(String, String)> {
+    let guard = pending_speech().lock().ok()?;
+    let pending = guard.as_ref()?;
+    (pending.at.elapsed() < PENDING_TTL).then(|| (pending.transcript.clone(), pending.request_id.clone()))
+}
+
+/// LISTENING and the recognition travel in one write: Luna marks the first
+/// frame of a fresh IPC connection as replayed state (initial snapshot) and the
+/// plugin ignores those, so the recognition must not be that frame.
+fn phrase_frames(transcript: &str, request_id: &str) -> Vec<u8> {
     let mut buf = frame_of(&crate::proto::build_alice_listening_event());
     buf.extend(frame_of(&crate::proto::build_alice_voice_event(
         transcript,
         request_id,
     )));
-    broadcast_frame(buf);
+    buf
+}
+
+pub fn broadcast_alice_speech(transcript: &str, request_id: &str) {
+    if let Ok(mut guard) = pending_speech().lock() {
+        *guard = Some(PendingSpeech {
+            transcript: transcript.to_owned(),
+            request_id: request_id.to_owned(),
+            at: std::time::Instant::now(),
+        });
+    }
+    broadcast_frame(phrase_frames(transcript, request_id));
 }
 
 pub fn spawn_aliced_ipc_server(state: Arc<BridgeState>) {
@@ -100,7 +133,18 @@ pub fn spawn_aliced_ipc_server(state: Arc<BridgeState>) {
         state.log("Listening on 127.0.0.1:9875 (aliced strict QuasarMessage.remoting IPC)");
         for stream in listener.incoming().flatten() {
             let st = state.clone();
-            if let Ok(writer) = stream.try_clone() {
+            if let Ok(mut writer) = stream.try_clone() {
+                let _ = writer.set_write_timeout(Some(Duration::from_millis(250)));
+                // A reader that reconnects right after an injection still gets
+                // the phrase; the plugin deduplicates by request_id, so a
+                // repeat is harmless.
+                if let Some((transcript, request_id)) = fresh_pending() {
+                    let _ = writer.write_all(&phrase_frames(&transcript, &request_id));
+                    st.log(format!(
+                        "aliced reader reconnected; replayed pending phrase {}",
+                        request_id
+                    ));
+                }
                 if let Ok(mut clients) = speech_writers().lock() {
                     clients.push(writer);
                 }
