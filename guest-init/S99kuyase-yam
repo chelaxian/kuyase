@@ -35,15 +35,30 @@ fi
 
 if [ -x /data/luna-ctl ]; then
   /data/luna-ctl wait || exit 0
-  for i in 1 2 3 4; do
-    /data/luna-ctl enable station.airplay >/dev/null 2>&1 || true
-    sleep 6
-    if /data/luna-ctl running station.airplay >/dev/null 2>&1 \
-       && netstat -ltn 2>/dev/null | grep -qE ':(5000|7000)'; then
-      break
-    fi
-    sleep 4
+
+  airplay_up() {
+    /data/luna-ctl running station.airplay >/dev/null 2>&1 \
+      && netstat -ltn 2>/dev/null | grep -qE ':(5000|7000)'
+  }
+
+  # A cold AirPlay start (private D-Bus, Avahi, nqptp, shairport-sync) needs
+  # close to a minute under TCG. Re-enabling during that window kills the
+  # plugin mid-start, so wait for the RTSP port first and only re-enable when
+  # the plugin process is really gone. Total budget: 3 attempts x 2 minutes.
+  attempt=0
+  while ! airplay_up && [ "$attempt" -lt 3 ]; do
+    /data/luna-ctl running station.airplay >/dev/null 2>&1 \
+      || /data/luna-ctl enable station.airplay >/dev/null 2>&1 || true
+    i=0
+    while [ "$i" -lt 24 ] && ! airplay_up; do
+      /data/luna-ctl running station.airplay >/dev/null 2>&1 || break
+      i=$((i + 1))
+      sleep 5
+    done
+    attempt=$((attempt + 1))
+    sleep 3
   done
+
   # Self-heal: only restart AirPlay when the plugin is actually dead. Checking
   # the RTSP port would kill a slow but healthy startup.
   (
