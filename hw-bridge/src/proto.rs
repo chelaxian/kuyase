@@ -469,6 +469,49 @@ pub fn decode_quasar_io_control_packet(payload: &[u8]) -> Result<DecodedIoHubPac
 mod tests {
     use super::*;
 
+    fn pb_field<'a>(buf: &'a [u8], wanted: u32) -> Option<PbField<'a>> {
+        let mut pos = 0usize;
+        while let Some((number, value)) = next_pb_field(buf, &mut pos).ok().flatten() {
+            if number == wanted {
+                return Some(value);
+            }
+        }
+        None
+    }
+
+    fn pb_bytes<'a>(buf: &'a [u8], wanted: u32) -> Option<&'a [u8]> {
+        match pb_field(buf, wanted) {
+            Some(PbField::Bytes(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    fn pb_varint(buf: &[u8], wanted: u32) -> Option<u64> {
+        match pb_field(buf, wanted) {
+            Some(PbField::Varint(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    /// Luna decodes aliced frames as QuasarMessage{3: AliceState{1: phase,
+    /// 2: transcript, 7: request_id, 15: {2: final}}}. An injected phrase must
+    /// produce exactly that, or /speech/next never yields an event.
+    #[test]
+    fn test_build_alice_events() {
+        let listening = build_alice_listening_event();
+        let state = pb_bytes(&listening, 3).expect("message.state");
+        assert_eq!(pb_varint(state, 1), Some(1), "LISTENING phase");
+        assert_eq!(pb_bytes(state, 2), None, "no transcript in listening");
+
+        let voice = build_alice_voice_event("пауза", "emu-7");
+        let state = pb_bytes(&voice, 3).expect("message.state");
+        assert_eq!(pb_varint(state, 1), None, "no phase means recognition");
+        assert_eq!(pb_bytes(state, 2), Some("пауза".as_bytes()));
+        assert_eq!(pb_bytes(state, 7), Some(b"emu-7".as_slice()));
+        let request = pb_bytes(state, 15).expect("state.request");
+        assert_eq!(pb_varint(request, 2), Some(1), "final flag");
+    }
+
     #[test]
     fn test_decode_cancel_dialog_and_vocalize() {
         let mut alice_method = Vec::new();
