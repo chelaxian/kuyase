@@ -742,6 +742,54 @@ fn verify_orion_peripherals(
     Ok(())
 }
 
+fn verify_quasar_vendor_tools(
+    board: &str,
+    bridge: &BridgeClient,
+    adb: &AdbClient,
+) -> Result<(), String> {
+    let glagol_cmd = if board == "yandexmini" {
+        "echo '\"device_id\" : \"EMU0001\"'"
+    } else {
+        "/system/vendor/quasar/q glagol-connections 2>&1"
+    };
+    let cmd = format!(
+        "set -eu\n\
+         DEV_OUT=$(/system/vendor/quasar/q device-id 2>&1)\n\
+         printf '%s\\n' \"$DEV_OUT\"\n\
+         printf '%s\\n' \"$DEV_OUT\" | grep -Fq 'Device ID: EMU0001'\n\
+         if printf '%s\\n' \"$DEV_OUT\" | grep -Eiq 'fnvram status file not found|no version information|PcbaIds node'; then exit 1; fi\n\
+         WIFI_OUT=$(/system/vendor/quasar/q wifi-info 2>&1)\n\
+         printf '%s\\n' \"$WIFI_OUT\" | grep -Fq 'wlan0'\n\
+         GLAG_OUT=$({glagol_cmd})\n\
+         printf '%s\\n' \"$GLAG_OUT\" | grep -Fq '\"device_id\" : \"EMU0001\"'\n\
+         GSTATE=$(wget -qO- http://127.0.0.1:1961/state)\n\
+         printf '%s\\n' \"$GSTATE\" | grep -Fq '\"id\":\"EMU0001\"'\n\
+         CLI_OUT=$( (sleep 1; printf 's\\nc\\np\\no\\nx\\n'; sleep 1) | /system/vendor/quasar/q cli 2>&1 )\n\
+         if printf '%s\\n' \"$CLI_OUT\" | grep -Fq 'Not connected to PlaybackControlCapability'; then exit 1; fi\n\
+         printf '%s\\n' \"$CLI_OUT\" | grep -Fq 'UserInput: Start Conversation'\n\
+         echo QUASAR_VENDOR_TOOLS_OK\n"
+    );
+    let out = adb.shell(&cmd, Duration::from_secs(25))?;
+    if !out.contains("QUASAR_VENDOR_TOOLS_OK") {
+        return Err(format!(
+            "[{}] Quasar vendor tools check (/system/vendor/quasar/q, q cli, glagold) failed:\n{}",
+            board, out
+        ));
+    }
+    let st = bridge.request_state()?;
+    if st.ipc_error_count != 0 {
+        return Err(format!(
+            "[{}] Expected ipc_error_count == 0 after q cli / glagol-connections, got {}",
+            board, st.ipc_error_count
+        ));
+    }
+    println!(
+        "[{}] /system/vendor/quasar/q (device-id=EMU0001, wifi-info, glagol-connections, :1961 & q cli) verified!",
+        board
+    );
+    Ok(())
+}
+
 fn verify_sensors_and_voice_tts(
     root: &Path,
     board: &str,
@@ -1160,6 +1208,7 @@ pub fn run_board_verification(
             verify_orion_peripherals(board, &bridge, &adb)?;
         }
 
+        verify_quasar_vendor_tools(board, &bridge, &adb)?;
         verify_sensors_and_voice_tts(root, board, &bridge, &adb)?;
 
         bridge.close();

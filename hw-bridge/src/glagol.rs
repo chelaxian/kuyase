@@ -250,9 +250,9 @@ pub fn handle_glagold_ipc_stream(mut stream: TcpStream, state: Arc<BridgeState>)
     let _ = stream.set_nodelay(true);
     let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
     // Wait briefly for an initial request (such as `q glagol-connections` sending type=185).
-    // If the client is a passive subscriber that sends nothing within 150ms, push an initial
-    // GlagolDiscoveryResult (187) + GlagoldState (82) snapshot in the firmware's wire format.
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(150)));
+    // If the client is a passive subscriber that sends nothing within 500ms, push an initial
+    // GlagolDiscoveryResult (187) + GlagoldState (82) + LogMessage (184) snapshot in the firmware's wire format.
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
     let mut len_buf = [0u8; 4];
     match stream.read_exact(&mut len_buf) {
         Ok(()) => {
@@ -266,10 +266,7 @@ pub fn handle_glagold_ipc_stream(mut stream: TcpStream, state: Arc<BridgeState>)
                 || e.kind() == std::io::ErrorKind::TimedOut =>
         {
             let wf = state.wire_format();
-            let disc = build_discovery_result_model(&state);
-            let gstate = build_glagold_state_model(&state);
-            let mut init_pkt = build_glagol_discovery_result_packet(&disc, wf);
-            init_pkt.extend_from_slice(&build_glagold_state_packet(&gstate, wf));
+            let init_pkt = build_glagold_ipc_reply_bundle(&state, wf);
             if stream.write_all(&init_pkt).is_err() {
                 return;
             }

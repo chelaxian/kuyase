@@ -19,20 +19,20 @@ pub struct GlagolDiscoveryItem {
 
 impl GlagolDiscoveryItem {
     pub fn encode(&self, buf: &mut Vec<u8>) {
+        if let Some(ref name) = self.name {
+            push_len_delimited(buf, 1, name.as_bytes());
+        }
         if let Some(ref did) = self.device_id {
-            push_len_delimited(buf, 1, did.as_bytes());
+            push_len_delimited(buf, 2, did.as_bytes());
         }
         if let Some(ref plat) = self.platform {
-            push_len_delimited(buf, 2, plat.as_bytes());
-        }
-        if let Some(ref name) = self.name {
-            push_len_delimited(buf, 6, name.as_bytes());
+            push_len_delimited(buf, 3, plat.as_bytes());
         }
         if let Some(ref addr) = self.address {
-            push_len_delimited(buf, 7, addr.as_bytes());
+            push_len_delimited(buf, 5, addr.as_bytes());
         }
         if let Some(allowed) = self.is_local_connection_allowed {
-            push_varint_field(buf, 10, u64::from(allowed));
+            push_varint_field(buf, 8, u64::from(allowed));
         }
     }
 
@@ -47,17 +47,22 @@ impl GlagolDiscoveryItem {
         let mut out = Self::default();
         while let Some((fnum, val)) = next_pb_field(buf, &mut pos).map_err(|e| e.to_string())? {
             match (fnum, val) {
-                (1, PbField::Bytes(b)) => {
+                (1, PbField::Bytes(b)) => out.name = Some(String::from_utf8_lossy(b).into_owned()),
+                (2, PbField::Bytes(b)) => {
                     out.device_id = Some(String::from_utf8_lossy(b).into_owned())
                 }
-                (2, PbField::Bytes(b)) => {
+                (3, PbField::Bytes(b)) => {
                     out.platform = Some(String::from_utf8_lossy(b).into_owned())
                 }
-                (6, PbField::Bytes(b)) => out.name = Some(String::from_utf8_lossy(b).into_owned()),
-                (7, PbField::Bytes(b)) => {
+                (5, PbField::Bytes(b)) | (7, PbField::Bytes(b)) => {
                     out.address = Some(String::from_utf8_lossy(b).into_owned())
                 }
-                (10, PbField::Varint(v)) => out.is_local_connection_allowed = Some(v != 0),
+                (6, PbField::Bytes(b)) if out.name.is_none() => {
+                    out.name = Some(String::from_utf8_lossy(b).into_owned())
+                }
+                (8, PbField::Varint(v)) | (10, PbField::Varint(v)) => {
+                    out.is_local_connection_allowed = Some(v != 0)
+                }
                 _ => {}
             }
         }
@@ -174,7 +179,16 @@ pub struct GlagoldState {
 impl GlagoldState {
     pub fn encode(&self, buf: &mut Vec<u8>) {
         for c in &self.connections {
-            push_len_delimited(buf, 1, c.as_bytes());
+            // `GlagoldState.connections = 1` is `repeated GlagoldState.Connection`
+            // (`message Connection { optional ConnectionType type = 1; }`).
+            // Encode `type = 1` (`GLAGOL_APP`) plus length-delimited field `99` carrying the
+            // human-readable descriptor so C++ `GlagoldState_Connection::_InternalParse` in
+            // legacy `QuasarMessage` builds (`orion`, `yandexmini`) parses `Connection` cleanly
+            // without failing on raw ASCII bytes.
+            let mut conn_buf = Vec::with_capacity(4 + c.len());
+            push_varint_field(&mut conn_buf, 1, 1);
+            push_len_delimited(&mut conn_buf, 99, c.as_bytes());
+            push_len_delimited(buf, 1, &conn_buf);
         }
         for d in &self.cluster_device_list {
             push_len_delimited(buf, 7, d.as_bytes());
@@ -196,7 +210,15 @@ impl GlagoldState {
         while let Some((fnum, val)) = next_pb_field(buf, &mut pos).map_err(|e| e.to_string())? {
             match (fnum, val) {
                 (1, PbField::Bytes(b)) => {
-                    out.connections.push(String::from_utf8_lossy(b).into_owned())
+                    let mut cpos = 0usize;
+                    let mut desc: Option<String> = None;
+                    while let Ok(Some((cfnum, cval))) = next_pb_field(b, &mut cpos) {
+                        if let (99, PbField::Bytes(cb)) = (cfnum, cval) {
+                            desc = Some(String::from_utf8_lossy(cb).into_owned());
+                        }
+                    }
+                    out.connections
+                        .push(desc.unwrap_or_else(|| String::from_utf8_lossy(b).into_owned()));
                 }
                 (7, PbField::Bytes(b)) => out
                     .cluster_device_list

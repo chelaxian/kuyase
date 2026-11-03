@@ -333,7 +333,16 @@ fn run_single_headless_board(
             if !clean_out.trim().is_empty() {
                 println!("{}", clean_out.trim_end());
             }
-            let post_state = bridge.request_state()?;
+            let post_state = match bridge.request_state() {
+                Ok(st) => st,
+                Err(_) => {
+                    let reconnected =
+                        BridgeClient::connect_with_timeout(bridge_addr, Duration::from_secs(5))?;
+                    let st = reconnected.request_state()?;
+                    reconnected.close();
+                    st
+                }
+            };
             if exit_code != 0 {
                 println!("-> [FAIL] {} (exit code {})\n", cfg.board, exit_code);
                 bridge.close();

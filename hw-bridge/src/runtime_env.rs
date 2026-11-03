@@ -498,6 +498,35 @@ pub fn ensure_linkplay_fnvram_under(root: &Path) {
     }
 }
 
+/// Ensures `/system/vendor/quasar/quasar.cfg` includes the top-level `"devConfig"` section
+/// (`"devFlag": "${DATA}/devFlag"`).
+///
+/// Why this exists:
+/// On `1.266.4.40` (`yandexmini`) and `0.13.1.36` (`orion`), `quasar.cfg` defines
+/// `"devConfig": { "backendUrl": "https://quasar.yandex.ru/dev", "devFlag": "${DATA}/devFlag" }`,
+/// whereas `0.369.1.*` and `0.373.1.13` images omit `"devConfig"`, causing
+/// `/system/vendor/quasar/q backend-dev` (`maind --set-dev-backend-flag`) and
+/// `/system/vendor/quasar/q backend-prod` (`maind --remove-dev-backend-flag`) to abort with
+/// `std::runtime_error: Dev Flag is not supported by this platform`.
+pub fn ensure_quasar_cfg_dev_config_under(root: &Path) {
+    let cfg_path = root.join("system/vendor/quasar/quasar.cfg");
+    let Ok(raw) = fs::read_to_string(&cfg_path) else {
+        return;
+    };
+    if raw.contains("\"devConfig\"") {
+        return;
+    }
+    if let Some(open_brace) = raw.find('{') {
+        let mut patched = String::with_capacity(raw.len() + 128);
+        patched.push_str(&raw[..=open_brace]);
+        patched.push_str(
+            "\n   \"devConfig\" : {\n      \"backendUrl\" : \"https://quasar.yandex.ru/dev\",\n      \"devFlag\" : \"${DATA}/devFlag\"\n   },",
+        );
+        patched.push_str(&raw[open_brace + 1..]);
+        let _ = fs::write(&cfg_path, patched);
+    }
+}
+
 /// Ensures fallback `/system/vendor/quasar/set_volume.sh` exists on boards (such as `cucumber`)
 /// where hardware volume is normally handled by `hardvold` and `set_volume.sh` is omitted from the image.
 pub fn ensure_fallback_set_volume_sh_under(root: &Path) {
@@ -860,6 +889,7 @@ pub fn prepare_runtime_environment(board_slug: &str, full_mode: bool) {
     ensure_unified_log_symlinks_under(root);
     ensure_platform_sysfs_nodes_under(root);
     ensure_linkplay_fnvram_under(root);
+    ensure_quasar_cfg_dev_config_under(root);
     ensure_fallback_set_volume_sh_under(root);
     ensure_virtual_wlan0_netdev();
     crate::dbus_stub::ensure_system_dbus_and_bluez_stub(board_slug, full_mode);
@@ -1033,13 +1063,23 @@ mod tests {
     fn test_unified_logs_and_fallback_set_volume() {
         let root = make_temp_root("logs-vol");
         fs::create_dir_all(root.join("system/vendor/quasar")).unwrap();
+        fs::write(
+            root.join("system/vendor/quasar/quasar.cfg"),
+            "{\n   \"common\": {\"deviceType\": \"bergamot\"}\n}\n",
+        )
+        .unwrap();
         ensure_unified_log_symlinks_under(&root);
+        ensure_quasar_cfg_dev_config_under(&root);
         ensure_fallback_set_volume_sh_under(&root);
 
         assert!(root.join("tmp/daemons_logs/maind.log").exists());
         assert!(root.join("data/quasar/daemons_logs/maind.log").exists());
         assert!(root.join("data/quasar/data").is_dir());
         assert!(root.join("system/vendor/quasar/set_volume.sh").exists());
+        let patched_cfg =
+            fs::read_to_string(root.join("system/vendor/quasar/quasar.cfg")).unwrap();
+        assert!(patched_cfg.contains("\"devConfig\""));
+        assert!(patched_cfg.contains("\"${DATA}/devFlag\""));
 
         let _ = fs::remove_dir_all(&root);
     }

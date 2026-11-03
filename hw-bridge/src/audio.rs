@@ -1,6 +1,6 @@
 use crate::state::BridgeState;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::Ordering;
@@ -236,6 +236,22 @@ pub fn ensure_alsa_compat_lib() {
         return;
     }
     let Ok(mut data) = fs::read(SYSTEM_LIBASOUND_PATH) else {
+        // On 32-bit Gen 3 boards (`bergamot`, `yandexmini2*`, `plum*`, `station2`, `yandexmicro`),
+        // `/system/vendor/quasar/libs/libasound.so.2.0.0` is absent and Buildroot's
+        // `/usr/lib/libasound.so.2.0.0` was compiled with `--without-versioned` (no `DT_VERDEF`),
+        // whereas `/system/vendor/quasar/maind` and `libquasar_gstreamer.so` have `DT_VERNEED`
+        // entries for `libasound.so.2` (`ALSA_0.9`, `ALSA_0.9.0rc4`). Strip the leading
+        // `libasound.so.2` `Verneed` entry in-place when `/usr/lib/libasound.so.2.0.0` has no
+        // `ALSA_0.9` version definitions so `ld-linux-armhf.so.3` never prints
+        // `libasound.so.2: no version information available`.
+        if usr_libasound_lacks_verdef(Path::new("/usr/lib/libasound.so.2.0.0")) {
+            for target in [
+                "/system/vendor/quasar/maind",
+                "/system/vendor/quasar/libs/libquasar_gstreamer.so",
+            ] {
+                let _ = strip_elf32_alsa_verneed_in_place(Path::new(target));
+            }
+        }
         return;
     };
     if data.len() < 64 || &data[0..4] != b"\x7fELF" || data[4] != 1 {
@@ -329,4 +345,218 @@ pub fn ensure_alsa_compat_lib() {
         }
         bind_patched_alsa_lib();
     }
+}
+
+fn usr_libasound_lacks_verdef(path: &Path) -> bool {
+    let Ok(data) = fs::read(path) else {
+        return false;
+    };
+    if data.len() < 64 || &data[0..4] != b"\x7fELF" || data[4] != 1 {
+        return false;
+    }
+    !data.windows(8).any(|w| w == b"ALSA_0.9")
+}
+
+/// Strips the leading `libasound.so.2` `Elf32_Verneed` entry (`ALSA_0.9`, `ALSA_0.9.0rc4`,
+/// `ALSA_0.9.0rc8`) in-place from a 32-bit ELF binary (`maind` or `libquasar_gstreamer.so`)
+/// when the guest rootfs ships an unversioned `/usr/lib/libasound.so.2.0.0`.
+///
+/// Specifically:
+/// 1. Reads `.gnu.version_r` and verifies that `Verneed[0].vn_file` points to `"libasound.so.2"`
+///    with `vn_next > 0`.
+/// 2. Collects all `vna_other` version indices from `Verneed[0]`'s `Elf32_Vernaux` list and
+///    rewrites matching 16-bit entries in `.gnu.version` (`DT_VERSYM`) to `1` (`VER_NDX_GLOBAL`).
+/// 3. Advances `DT_VERNEED` (`0x6ffffffe`) by `vn_next` and decrements `DT_VERNEEDNUM`
+///    (`0x6fffffff`) by `1` in `.dynamic` (and updates the `.gnu.version_r` section header).
+/// Because all `vn_aux` and `vn_next` offsets in `Elf32_Verneed` are self-relative, the remaining
+/// `Verneed` entries (`libdl.so.2`, `librt.so.1`, `libpthread.so.0`, `libc.so.6`, `libm.so.6`)
+/// stay intact while only ~2 KB of metadata is written in-place via `Seek` + `write_all`.
+pub fn strip_elf32_alsa_verneed_in_place(path: &Path) -> bool {
+    let Ok(mut file) = fs::OpenOptions::new().read(true).write(true).open(path) else {
+        return false;
+    };
+    let mut ehdr = [0u8; 52];
+    if file.read_exact(&mut ehdr).is_err() {
+        return false;
+    }
+    if &ehdr[0..4] != b"\x7fELF" || ehdr[4] != 1 || ehdr[5] != 1 {
+        return false;
+    }
+
+    let read_u16 = |b: &[u8], off: usize| -> u16 { u16::from_le_bytes([b[off], b[off + 1]]) };
+    let read_u32 = |b: &[u8], off: usize| -> u32 {
+        u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
+    };
+
+    let e_shoff = read_u32(&ehdr, 32) as u64;
+    let e_shentsize = read_u16(&ehdr, 46) as usize;
+    let e_shnum = read_u16(&ehdr, 48) as usize;
+    let e_shstrndx = read_u16(&ehdr, 50) as usize;
+    if e_shoff == 0
+        || e_shentsize < 40
+        || e_shnum == 0
+        || e_shstrndx >= e_shnum
+        || e_shnum > 256
+    {
+        return false;
+    }
+
+    let mut sh_table = vec![0u8; e_shnum * e_shentsize];
+    if file.seek(SeekFrom::Start(e_shoff)).is_err() || file.read_exact(&mut sh_table).is_err() {
+        return false;
+    }
+
+    let shstr_hdr_off = e_shstrndx * e_shentsize;
+    let shstr_off = read_u32(&sh_table, shstr_hdr_off + 16) as u64;
+    let shstr_size = read_u32(&sh_table, shstr_hdr_off + 20) as usize;
+    if shstr_size == 0 || shstr_size > 1024 * 1024 {
+        return false;
+    }
+    let mut shstrtab = vec![0u8; shstr_size];
+    if file.seek(SeekFrom::Start(shstr_off)).is_err() || file.read_exact(&mut shstrtab).is_err() {
+        return false;
+    }
+
+    let mut dynstr_sec = (0u64, 0usize);
+    let mut gnu_ver_sec = (0u64, 0usize);
+    let mut verneed_sec = (0usize, 0u32, 0u64, 0usize, 0u32);
+    let mut dynamic_sec = (0u64, 0usize);
+
+    for i in 0..e_shnum {
+        let off = i * e_shentsize;
+        let sh_name = read_u32(&sh_table, off) as usize;
+        let sh_addr = read_u32(&sh_table, off + 12);
+        let sh_offset = read_u32(&sh_table, off + 16) as u64;
+        let sh_size = read_u32(&sh_table, off + 20) as usize;
+        let sh_info = read_u32(&sh_table, off + 28);
+        if sh_name >= shstrtab.len() {
+            continue;
+        }
+        let name_end = shstrtab[sh_name..]
+            .iter()
+            .position(|&c| c == 0)
+            .map(|p| sh_name + p)
+            .unwrap_or(shstrtab.len());
+        match &shstrtab[sh_name..name_end] {
+            b".dynstr" => dynstr_sec = (sh_offset, sh_size),
+            b".gnu.version" => gnu_ver_sec = (sh_offset, sh_size),
+            b".gnu.version_r" => verneed_sec = (i, sh_addr, sh_offset, sh_size, sh_info),
+            b".dynamic" => dynamic_sec = (sh_offset, sh_size),
+            _ => {}
+        }
+    }
+
+    if dynstr_sec.1 == 0
+        || gnu_ver_sec.1 == 0
+        || verneed_sec.3 < 16
+        || verneed_sec.4 <= 1
+        || dynamic_sec.1 == 0
+    {
+        return false;
+    }
+
+    let mut dynstr = vec![0u8; dynstr_sec.1];
+    if file.seek(SeekFrom::Start(dynstr_sec.0)).is_err() || file.read_exact(&mut dynstr).is_err() {
+        return false;
+    }
+    let mut verneed = vec![0u8; verneed_sec.3];
+    if file.seek(SeekFrom::Start(verneed_sec.2)).is_err()
+        || file.read_exact(&mut verneed).is_err()
+    {
+        return false;
+    }
+
+    let vn_cnt = read_u16(&verneed, 2) as usize;
+    let vn_file = read_u32(&verneed, 4) as usize;
+    let vn_aux = read_u32(&verneed, 8) as usize;
+    let vn_next = read_u32(&verneed, 12);
+    if vn_next == 0 || vn_file >= dynstr.len() {
+        return false;
+    }
+    let file_name_end = dynstr[vn_file..]
+        .iter()
+        .position(|&c| c == 0)
+        .map(|p| vn_file + p)
+        .unwrap_or(dynstr.len());
+    if &dynstr[vn_file..file_name_end] != b"libasound.so.2" {
+        return false;
+    }
+
+    let mut alsa_ver_indices = Vec::with_capacity(vn_cnt);
+    let mut apos = vn_aux;
+    for _ in 0..vn_cnt {
+        if apos + 16 > verneed.len() {
+            break;
+        }
+        let vna_other = read_u16(&verneed, apos + 6) & 0x7fff;
+        let vna_next = read_u32(&verneed, apos + 12) as usize;
+        if vna_other >= 2 {
+            alsa_ver_indices.push(vna_other);
+        }
+        if vna_next == 0 {
+            break;
+        }
+        apos += vna_next;
+    }
+    if alsa_ver_indices.is_empty() {
+        return false;
+    }
+
+    let mut gnu_ver = vec![0u8; gnu_ver_sec.1];
+    if file.seek(SeekFrom::Start(gnu_ver_sec.0)).is_err()
+        || file.read_exact(&mut gnu_ver).is_err()
+    {
+        return false;
+    }
+    for chunk in gnu_ver.chunks_exact_mut(2) {
+        let ver = u16::from_le_bytes([chunk[0], chunk[1]]) & 0x7fff;
+        if alsa_ver_indices.contains(&ver) {
+            chunk.copy_from_slice(&1u16.to_le_bytes());
+        }
+    }
+    if file.seek(SeekFrom::Start(gnu_ver_sec.0)).is_err() || file.write_all(&gnu_ver).is_err() {
+        return false;
+    }
+
+    let mut dynamic = vec![0u8; dynamic_sec.1];
+    if file.seek(SeekFrom::Start(dynamic_sec.0)).is_err()
+        || file.read_exact(&mut dynamic).is_err()
+    {
+        return false;
+    }
+    for entry in dynamic.chunks_exact_mut(8) {
+        let d_tag = u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]);
+        let d_val = u32::from_le_bytes([entry[4], entry[5], entry[6], entry[7]]);
+        if d_tag == 0x6fff_fffe {
+            // DT_VERNEED
+            entry[4..8].copy_from_slice(&d_val.wrapping_add(vn_next).to_le_bytes());
+        } else if d_tag == 0x6fff_ffff && d_val > 1 {
+            // DT_VERNEEDNUM
+            entry[4..8].copy_from_slice(&(d_val - 1).to_le_bytes());
+        }
+    }
+    if file.seek(SeekFrom::Start(dynamic_sec.0)).is_err() || file.write_all(&dynamic).is_err() {
+        return false;
+    }
+
+    let sec_hdr_off = verneed_sec.0 * e_shentsize;
+    let new_sh_addr = verneed_sec.1.wrapping_add(vn_next);
+    let new_sh_offset = (verneed_sec.2 as u32).wrapping_add(vn_next);
+    let new_sh_size = (verneed_sec.3 as u32).saturating_sub(vn_next);
+    let new_sh_info = verneed_sec.4.saturating_sub(1);
+    sh_table[sec_hdr_off + 12..sec_hdr_off + 16].copy_from_slice(&new_sh_addr.to_le_bytes());
+    sh_table[sec_hdr_off + 16..sec_hdr_off + 20].copy_from_slice(&new_sh_offset.to_le_bytes());
+    sh_table[sec_hdr_off + 20..sec_hdr_off + 24].copy_from_slice(&new_sh_size.to_le_bytes());
+    sh_table[sec_hdr_off + 28..sec_hdr_off + 32].copy_from_slice(&new_sh_info.to_le_bytes());
+
+    let sec_file_off = e_shoff + (sec_hdr_off as u64);
+    if file.seek(SeekFrom::Start(sec_file_off)).is_err()
+        || file
+            .write_all(&sh_table[sec_hdr_off..sec_hdr_off + e_shentsize])
+            .is_err()
+    {
+        return false;
+    }
+    let _ = file.flush();
+    true
 }

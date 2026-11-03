@@ -105,6 +105,13 @@ impl BridgeClient {
                                     guard.push_back(CommandAckPayload { ok, error, message });
                                     cv.notify_all();
                                 }
+                                Err(ref e)
+                                    if e.kind() == std::io::ErrorKind::Interrupted
+                                        || e.kind() == std::io::ErrorKind::WouldBlock
+                                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                                {
+                                    continue;
+                                }
                                 Err(_) => break,
                             }
                         }
