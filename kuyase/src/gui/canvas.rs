@@ -562,6 +562,28 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                     "Датчик внешней освещённости ALS (ltr308als01 в /sys/bus/iio/devices/iio:device0/in_illuminance_raw).\n\
                                      Используется прошивкой для автояркости светового кольца и дисплея часов (оптического датчика жестов VL53L0X на этой модели нет).",
                                 );
+
+                                if board_slug == "mango" {
+                                    ui.add(
+                                        egui::Button::new(
+                                            RichText::new("АКБ CW2217 + IP2366 PD")
+                                                .small()
+                                                .monospace()
+                                                .color(Color32::from_rgb(135, 235, 165)),
+                                        )
+                                        .fill(Color32::from_rgb(24, 52, 36))
+                                        .rounding(99.0)
+                                        .sense(Sense::hover()),
+                                    )
+                                    .on_hover_text(
+                                        "Портативная подсистема питания Яндекс Станции Стрит (mango):\n\
+                                         • Кулонометр АКБ CW2217: /sys/devices/virtual/cw2217_cls/cw2217_coulomb/{capacity,battery_vol,battery_current,battery_temp,soh,cycle}\n\
+                                         • Контроллер зарядки IP2366 USB-C PD: /sys/devices/virtual/ip2366_cls/ip2366_charger/{charge_status,is_pd,charge_voltage,pd_protocol,switch_charge}\n\
+                                         • Стандартный интерфейс Linux: /sys/class/power_supply/battery/*\n\
+                                         • Усилитель TI ACM8625S (2-002c): профили mango-acm8625.cfg (в помещении) и mango-acm8625-outside.cfg (на улице)\n\
+                                         Управлять параметрами в 1 клик можно справа в блоке «3. Специфичная периферия платы (mango)».",
+                                    );
+                                }
                             }
                         });
 
@@ -732,6 +754,25 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                             render_matrix_21x12_faceplate(ui, app, &st, bridge_online);
                         } else if board_has_segment_clock(&board_slug, &st) {
                             render_segment_clock_faceplate(ui, app, &board_slug, &st, bridge_online);
+                        } else if board_slug == "mango" {
+                            ui.label(
+                                RichText::new(
+                                    "Индикация корпуса Станции Стрит (mango): 4-LED шкала заряда (/dev/fb0) + 3-LED логотип oknix (/dev/fb1)",
+                                )
+                                .small()
+                                .strong()
+                                .color(Color32::from_rgb(175, 190, 210)),
+                            );
+                            ui.label(
+                                RichText::new(
+                                    "• Верхний блок (4 LED, AW9110): индикатор заряда АКБ (/dev/fb0 и /sys/class/leds/mango:*:ring1..4, паттерны ledpatterns/battery/*.led)\n\
+                                     • Логотип oknix ниже (3 RGBW LED, AW21012): фронтальный индикатор Алисы (/dev/fb1 и /sys/class/leds/mango:*:logo0..2, паттерны ledpatterns/oknix/*.led)",
+                                )
+                                .small()
+                                .color(Color32::from_rgb(140, 150, 168)),
+                            );
+                            ui.add_space(4.0);
+                            render_aux_logo_strip(ui, app, &board_slug, &st);
                         } else {
                             ui.label(
                                 RichText::new(format!(
@@ -749,6 +790,7 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                 .small()
                                 .color(Color32::from_rgb(135, 145, 160)),
                             );
+                            render_aux_logo_strip(ui, app, &board_slug, &st);
                         }
                     });
 
@@ -1005,6 +1047,15 @@ fn render_segment_clock_faceplate(
         }
     });
 
+    render_aux_logo_strip(ui, app, board_slug, st);
+}
+
+fn render_aux_logo_strip(
+    ui: &mut egui::Ui,
+    app: &mut GuiAppState,
+    board_slug: &str,
+    st: &BridgeStateSnapshot,
+) {
     if st.aux_light_kind == "logo" || matches!(board_slug, "cucumber" | "pickle" | "mango") {
         let count = if !st.logo_pixels.is_empty() {
             st.logo_pixels.len()
@@ -1013,13 +1064,35 @@ fn render_segment_clock_faceplate(
         } else {
             6
         };
-        ui.horizontal(|ui| {
+        let hover_desc = if board_slug == "mango" {
+            "3-LED RGBW панель логотипа «oknix» на корпусе Яндекс Станции Стрит (mango):\n\
+             • Аппаратный драйвер: Awinic AW21012 (leds-aw2101x.ko) + фреймбуфер quasar_led_ring.ko\n\
+             • Запись через фреймбуфер /dev/fb1 (name=\"logo\" / \"oknix\"): 9 байт RGB24 (3×3) или 12 байт RGBW32 (3×4)\n\
+             • Поканальное управление через sysfs: /sys/class/leds/mango:{red,green,blue}:logo{0..2}/brightness (0..255)\n\
+             • Штатные анимации Алисы: /system/vendor/quasar/ledpatterns/oknix/*.led"
+        } else {
+            "Дополнительная адресная RGB-подсветка логотипа Алисы на фронтальной панели:\n\
+             • Запись кадра через фреймбуфер /dev/fb1 (name=\"logo\"): 3 байта RGB на каждый светодиод\n\
+             • Поканальное управление через sysfs: /sys/class/leds/<prefix>:{red,green,blue}:logo{0..N}/brightness (0..255)"
+        };
+
+        ui.horizontal_wrapped(|ui| {
+            let lbl_text = if board_slug == "mango" {
+                format!("Логотип oknix (/dev/fb1, {} LED): (?)", count)
+            } else {
+                format!("Логотип (/dev/fb1, {} LED): (?)", count)
+            };
             ui.label(
-                RichText::new(format!("Логотип (/dev/fb1, {} LED):", count))
+                RichText::new(lbl_text)
                     .small()
-                    .color(Color32::from_rgb(160, 170, 185)),
-            );
-            let (lrect, _) = ui.allocate_exact_size(Vec2::new(150.0, 20.0), Sense::hover());
+                    .strong()
+                    .color(Color32::from_rgb(160, 185, 215)),
+            )
+            .on_hover_text(hover_desc);
+
+            let (lrect, lresp) =
+                ui.allocate_exact_size(Vec2::new((count as f32) * 20.0 + 16.0, 20.0), Sense::hover());
+            lresp.on_hover_text(hover_desc);
             let lp = ui.painter_at(lrect);
             for i in 0..count {
                 let rgb = st
@@ -1029,6 +1102,36 @@ fn render_segment_clock_faceplate(
                     .unwrap_or([0, 185, 235]);
                 let x = lrect.left() + 10.0 + (i as f32) * 20.0;
                 draw_ring_led(&lp, Pos2::new(x, lrect.center().y), 4.6, rgb);
+            }
+
+            if app.session.is_some() {
+                if ui
+                    .small_button("Фиолетовый")
+                    .on_hover_text("Записать фиолетовый цвет Алисы (#6B0FFF) в /dev/fb1")
+                    .clicked()
+                {
+                    app.send_serial_command(
+                        "printf '\\x6b\\x0f\\xff\\x6b\\x0f\\xff\\x6b\\x0f\\xff\\x6b\\x0f\\xff\\x6b\\x0f\\xff\\x6b\\x0f\\xff' > /dev/fb1",
+                    );
+                }
+                if ui
+                    .small_button("Бирюзовый")
+                    .on_hover_text("Записать бирюзовый цвет (#22CCFF) в /dev/fb1")
+                    .clicked()
+                {
+                    app.send_serial_command(
+                        "printf '\\x22\\xcc\\xff\\x22\\xcc\\xff\\x22\\xcc\\xff\\x22\\xcc\\xff\\x22\\xcc\\xff\\x22\\xcc\\xff' > /dev/fb1",
+                    );
+                }
+                if ui
+                    .small_button("Погасить")
+                    .on_hover_text("Очистить /dev/fb1 и сбросить яркость logo0..N в sysfs в 0")
+                    .clicked()
+                {
+                    app.send_serial_command(
+                        "for d in /sys/class/leds/*:logo*; do [ -d \"$d\" ] && echo 0 > \"$d/brightness\"; done; dd if=/dev/zero of=/dev/fb1 bs=18 count=1 2>/dev/null || true",
+                    );
+                }
             }
         });
     }

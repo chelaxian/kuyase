@@ -21,10 +21,10 @@ pub const BOARD_LABELS: &[(&str, &str)] = &[
     ("plum", "plum — Станция Лайт 2 с часами (3 LED + Часы)"),
     ("plumnc", "plumnc — Станция Лайт 2 без часов (3 LED)"),
     ("station2", "station2 — Яндекс Станция 2 (88 LED световая панель)"),
+    ("mango", "mango — Станция Стрит (4 LED + 3 LED Лого)"),
     ("yandexmini", "yandexmini — Станция Мини 1 (6 LED SN3236 BGR + ToF)"),
     ("yandexmicro", "yandexmicro — Станция Лайт 1 (3 LED sysfs)"),
     ("pickle", "pickle — Станция Мини 3 Про (16 LED + Часы + 6 LED Лого)"),
-    ("mango", "mango — Станция Стрит (4 LED + 3 LED Лого)"),
     ("saturn", "saturn — Яндекс Хаб (1 LED)"),
 ];
 

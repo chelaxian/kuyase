@@ -1681,7 +1681,55 @@ pub fn builtin_guest_dir_entries(abs_dir: &str, board_slug: &str) -> Vec<String>
         ],
         "/tmp/daemons_logs" => &["maind.log"],
         "/sys" => &["bus/", "class/", "devices/", "firmware/", "fs/", "kernel/", "module/"],
-        "/sys/class" => &["graphics/", "i2c-adapter/", "input/", "leds/", "net/", "sound/"],
+        "/sys/bus" => &["i2c/", "iio/"],
+        "/sys/bus/i2c" => &["devices/"],
+        "/sys/bus/i2c/devices" => &["2-002c/", "3-002c/", "3-002d/", "3-002e/"],
+        "/sys/bus/i2c/devices/2-002c" => &["default_settings", "name", "settings_file"],
+        "/sys/class" => &[
+            "backlight/",
+            "graphics/",
+            "i2c-adapter/",
+            "input/",
+            "leds/",
+            "net/",
+            "power_supply/",
+            "sound/",
+            "thermal/",
+            "unifykeys/",
+        ],
+        "/sys/class/power_supply" => &["battery/", "ya_pd/"],
+        "/sys/class/power_supply/battery" => &[
+            "capacity",
+            "current_now",
+            "health",
+            "present",
+            "status",
+            "temp",
+            "type",
+            "voltage_now",
+        ],
+        "/sys/devices" => &["platform/", "system/", "virtual/"],
+        "/sys/devices/virtual" => &["cw2217_cls/", "dmi/", "ip2366_cls/"],
+        "/sys/devices/virtual/cw2217_cls" => &["cw2217_coulomb/"],
+        "/sys/devices/virtual/cw2217_cls/cw2217_coulomb" => &[
+            "battery_current",
+            "battery_temp",
+            "battery_vol",
+            "capacity",
+            "cycle",
+            "soh",
+        ],
+        "/sys/devices/virtual/ip2366_cls" => &["ip2366_charger/"],
+        "/sys/devices/virtual/ip2366_cls/ip2366_charger" => &[
+            "charge_status",
+            "charge_voltage",
+            "is_pd",
+            "pd_protocol",
+            "switch_charge",
+        ],
+        "/sys/devices/platform" => &["charge-animation/", "logo-animation/", "pcba_ids/"],
+        "/sys/devices/platform/pcba_ids" => &["pcba_ids_drv/"],
+        "/sys/devices/platform/pcba_ids/pcba_ids_drv" => &["pcba_ids"],
         "/sys/class/graphics" => &["fb0/", "fb1/", "fb2/"],
         "/sys/class/leds" => {
             let prefix = match board_slug {
@@ -1697,7 +1745,7 @@ pub fn builtin_guest_dir_entries(abs_dir: &str, board_slug: &str) -> Vec<String>
                 "saturn" => "saturn",
                 _ => "led",
             };
-            return vec![
+            let mut entries = vec![
                 format!("{}:red:ring0/", prefix),
                 format!("{}:green:ring0/", prefix),
                 format!("{}:blue:ring0/", prefix),
@@ -1705,6 +1753,12 @@ pub fn builtin_guest_dir_entries(abs_dir: &str, board_slug: &str) -> Vec<String>
                 format!("{}:green:ring1/", prefix),
                 format!("{}:blue:ring1/", prefix),
             ];
+            if matches!(board_slug, "cucumber" | "pickle" | "mango") {
+                entries.push(format!("{}:red:logo0/", prefix));
+                entries.push(format!("{}:green:logo0/", prefix));
+                entries.push(format!("{}:blue:logo0/", prefix));
+            }
+            return entries;
         }
         "/usr" => &["bin/", "lib/", "local/", "sbin/", "share/"],
         "/usr/local" => &["bin/"],
