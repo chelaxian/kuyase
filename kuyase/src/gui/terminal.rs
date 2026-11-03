@@ -42,6 +42,18 @@ const SERIAL_SNIPPETS: &[(&str, &str)] = &[
         "cd /sys/class/leds;for f in $(seq 1 24);do for i in $(seq 0 11);do echo $((((i+f)%3==0)*250))>orion:red:ambilight${i}a/brightness;echo $((((i+f)%3==1)*250))>orion:green:ambilight${i}a/brightness;echo $((((i+f)%3==2)*250))>orion:blue:ambilight${i}b/brightness;done;usleep 50000;done",
     ),
     (
+        "Mango (Стрит): Кулонометр CW2217 + зарядка IP2366 PD + battery",
+        "head -n 1 /sys/devices/virtual/cw2217_cls/cw2217_coulomb/* /sys/devices/virtual/ip2366_cls/ip2366_charger/* /sys/class/power_supply/battery/*",
+    ),
+    (
+        "Mango (Стрит): Усилитель ACM8625S (2-002c) и ревизии pcba_ids",
+        "head -n 1 /sys/bus/i2c/devices/2-002c/name /sys/bus/i2c/devices/2-002c/settings_file /tmp/amp_settings_file /sys/devices/platform/pcba_ids/pcba_ids_drv/pcba_ids",
+    ),
+    (
+        "Mango / Cucumber: Логотип (/dev/fb1) — тест цветов Алисы",
+        "printf '\\x00\\xff\\x80\\x6b\\x0f\\xff\\x22\\xcc\\xff\\x00\\xff\\x80\\x6b\\x0f\\xff\\x22\\xcc\\xff' > /dev/fb1",
+    ),
+    (
         "Mini 1 (SN3236): Теневые регистры I2C 0x3c -> защёлка 0x25",
         "i2cset -y 0 0x3c 0x00 0x01; for r in $(seq 1 3 16); do i2cset -y 0 0x3c $r 0xff; i2cset -y 0 0x3c $((r+1)) 0x40; i2cset -y 0 0x3c $((r+2)) 0x90; done; sleep 1; i2cset -y 0 0x3c 0x25 0x01",
     ),

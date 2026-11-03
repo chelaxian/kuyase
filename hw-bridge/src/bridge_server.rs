@@ -1,6 +1,7 @@
 use crate::audio::{play_expressive_tts_to_alsa, play_synthetic_tone_to_alsa};
 use crate::input::emit_compat_input_event;
-use crate::proto::push_len_delimited;
+use crate::ipc::{broadcast_alice_speech, speech_subscribers};
+use crate::proto::{frame_quasar_packet, push_len_delimited};
 use crate::state::{AliceState, BridgeState, MAIND_LOG_PATH};
 use protocol::{
     read_host_command, write_guest_packet, BridgeStateSnapshot, GuestPacket, HostCommand,
@@ -9,11 +10,14 @@ use std::env;
 use std::fs;
 use std::io::{BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
+
+const AIRPLAY_PRIVATE_BUS_PATH: &str = "/run/station-airplay/private-bus";
 
 pub fn run_server(state: Arc<BridgeState>) {
     let bind_addr = env::var("HW_BRIDGE_BIND").unwrap_or_else(|_| "0.0.0.0:8091".to_string());
@@ -52,14 +56,99 @@ fn parse_phrase_volume(phrase: &str) -> Option<u32> {
     None
 }
 
+fn push_volume_to_luna(level: u32) {
+    let percent = level.min(10) * 10;
+
+    // If Luna is running on 127.0.0.1:8099, forward the host volume change
+    // via its native HTTP API (`/api/volume/set`).
+    let luna_addr = std::net::SocketAddr::from(([127, 0, 0, 1], 8099));
+    if let Ok(mut s) = TcpStream::connect_timeout(&luna_addr, Duration::from_millis(80)) {
+        let _ = s.set_write_timeout(Some(Duration::from_millis(250)));
+        let body = format!("{{\"percent\":{percent}}}");
+        let req = format!(
+            "POST /api/volume/set HTTP/1.0\r\nHost: 127.0.0.1:8099\r\nContent-Type: application/json\r\nX-Luna-Local: 1\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = s.write_all(req.as_bytes());
+    }
+}
+
+fn set_host_volume(state: &BridgeState, level: u32) {
+    state.set_volume_level(level);
+    push_volume_to_luna(level);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransportCommand {
+    Pause,
+    Play,
+    Next,
+    Previous,
+}
+
+impl TransportCommand {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pause => "Pause",
+            Self::Play => "Play",
+            Self::Next => "Next",
+            Self::Previous => "Previous",
+        }
+    }
+}
+
+fn parse_phrase_transport(phrase: &str) -> Option<TransportCommand> {
+    let p = phrase.to_lowercase();
+    if p.contains("пауз") || p.contains("pause") || p.contains("стоп") || p.contains("останов") {
+        Some(TransportCommand::Pause)
+    } else if p.contains("продолж")
+        || p.contains("resume")
+        || p.contains("играй")
+        || p.contains("плей")
+        || p.contains("play")
+    {
+        Some(TransportCommand::Play)
+    } else if p.contains("дальше") || p.contains("следующ") || p.contains("next") {
+        Some(TransportCommand::Next)
+    } else if p.contains("назад") || p.contains("предыдущ") || p.contains("previous") {
+        Some(TransportCommand::Previous)
+    } else {
+        None
+    }
+}
+
+fn send_airplay_transport(command: TransportCommand) -> Result<(), String> {
+    // Same D-Bus call the station-airplay plugin's Alice button uses.
+    // --print-reply is mandatory: without it dbus-send disconnects before the
+    // call is delivered and the transport command silently does nothing.
+    let method = format!(
+        "org.gnome.ShairportSync.RemoteControl.{}",
+        command.as_str()
+    );
+    match Command::new("dbus-send")
+        .arg(format!("--bus=unix:path={AIRPLAY_PRIVATE_BUS_PATH}"))
+        .arg("--print-reply")
+        .arg("--dest=org.gnome.ShairportSync")
+        .arg("/org/gnome/ShairportSync")
+        .arg(method)
+        .output()
+    {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(out) => Err(format!(
+            "dbus-send failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+        Err(error) => Err(format!("dbus-send failed: {error}")),
+    }
+}
+
 fn send_local_aliced_packet(payload: &[u8]) -> bool {
     let Ok(mut s) = TcpStream::connect("127.0.0.1:9875") else {
         return false;
     };
     let _ = s.set_nodelay(true);
-    let mut framed = Vec::with_capacity(4 + payload.len());
-    framed.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-    framed.extend_from_slice(payload);
+    let framed = frame_quasar_packet(payload);
     let ok = s.write_all(&framed).is_ok();
     let _ = s.flush();
     ok
@@ -184,11 +273,11 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
                 }
                 "volume_up" => {
                     let cur = state.volume_level.load(Ordering::Relaxed);
-                    state.set_volume_level((cur + 1).min(10));
+                    set_host_volume(state, (cur + 1).min(10));
                 }
                 "volume_down" => {
                     let cur = state.volume_level.load(Ordering::Relaxed);
-                    state.set_volume_level(cur.saturating_sub(1));
+                    set_host_volume(state, cur.saturating_sub(1));
                 }
                 _ => {
                     state.log(format!("Inject button: {} ({})", btn, act));
@@ -241,7 +330,7 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
             }
         }
         HostCommand::SetVolume { volume_level } => {
-            state.set_volume_level(volume_level);
+            set_host_volume(state, volume_level);
             GuestPacket::CommandAck {
                 ok: true,
                 error: None,
@@ -475,10 +564,29 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
                 ));
             }
 
+            // A recognised phrase is what triggers the station's own command
+            // path: aliced event -> Luna /speech/next -> station-airplay. The
+            // emulator has no recogniser, so publish the frame ourselves.
+            if !wake_only && !phrase_clean.is_empty() {
+                let request_id = format!("emu-{seq}");
+                let transcript = phrase_clean.clone();
+                let st_event = state.clone();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(300));
+                    broadcast_alice_speech(&transcript, &request_id);
+                    st_event.log(format!(
+                        "Voice recognition -> aliced event request_id={} ({} subscriber(s))",
+                        request_id,
+                        speech_subscribers()
+                    ));
+                });
+            }
+
             let st = state.clone();
             let has_phrase = !wake_only && !phrase_clean.is_empty();
             let phrase_for_tts = phrase_clean.clone();
             let parsed_vol = parse_phrase_volume(&phrase_clean);
+            let parsed_transport = parse_phrase_transport(&phrase_clean);
             thread::spawn(move || {
                 thread::sleep(Duration::from_millis(650));
                 st.mic_burst_active.store(false, Ordering::SeqCst);
@@ -492,7 +600,44 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
                         && st.hijacked_seq.load(Ordering::SeqCst) < seq
                     {
                         if let Some(v) = parsed_vol {
-                            st.set_volume_level(v);
+                            set_host_volume(&st, v);
+                        }
+                        if let Some(cmd) = parsed_transport {
+                            if Path::new(AIRPLAY_PRIVATE_BUS_PATH).exists() {
+                                // The plugin only executes after Luna hands it the
+                                // aliced event, and on the bench Luna's runtime API
+                                // can stall under TCG. If the plugin did not claim
+                                // the dialog (this branch only runs when it did
+                                // not), send the same D-Bus call it would have sent.
+                                let how = if speech_subscribers() == 0 {
+                                    "direct, no aliced subscriber"
+                                } else {
+                                    "direct, plugin did not claim"
+                                };
+                                match send_airplay_transport(cmd) {
+                                    Ok(()) => {
+                                        st.log(format!(
+                                            "Voice transport -> AirPlay {} ({}, dbus-send -> ok)",
+                                            cmd.as_str(),
+                                            how
+                                        ));
+                                        // Transport commands are silent on a real station:
+                                        // the command spotter acts and Alice says nothing.
+                                        st.log("Dialog Hijack window (1680ms) expired without CANCEL_DIALOG -> transport handled silently");
+                                        st.set_alice_state(AliceState::Idle);
+                                        st.append_maind_log("[sdk] onAliceStateChanged: IDLE");
+                                        return;
+                                    }
+                                    Err(err) => {
+                                        st.log(format!(
+                                            "Voice transport -> AirPlay {} ({}, {})",
+                                            cmd.as_str(),
+                                            how,
+                                            err
+                                        ));
+                                    }
+                                }
+                            }
                         }
                         let auto_reply = format!("Выполняю: {}", phrase_for_tts);
                         *st.last_spoken_text.lock().unwrap() = auto_reply.clone();
@@ -612,11 +757,11 @@ fn handle_client(stream: TcpStream, state: Arc<BridgeState>) -> std::io::Result<
     let _ = write_stream.set_nodelay(true);
 
     let (tx, rx) = mpsc::sync_channel::<GuestPacket>(512);
-    state.bridge_clients.lock().unwrap().push(tx.clone());
 
-    // Immediately push initial StateSnapshot on connect
+    // Immediately push initial StateSnapshot on connect before registering in bridge_clients
     let initial_snap = build_state_snapshot(&state);
     let _ = tx.send(GuestPacket::StateSnapshot(initial_snap.clone()));
+    state.bridge_clients.lock().unwrap().push(tx.clone());
 
     let alive = Arc::new(AtomicBool::new(true));
 
@@ -675,4 +820,35 @@ fn handle_client(stream: TcpStream, state: Arc<BridgeState>) -> std::io::Result<
 
     alive.store(false, Ordering::SeqCst);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_phrase_volume_and_transport() {
+        assert_eq!(parse_phrase_volume("поставь громкость 4"), Some(4));
+        assert_eq!(parse_phrase_volume("volume 9"), Some(9));
+        assert_eq!(parse_phrase_volume("volume 15"), Some(10));
+        assert_eq!(parse_phrase_volume("включи ночной режим"), None);
+
+        assert_eq!(
+            parse_phrase_transport("поставь на паузу"),
+            Some(TransportCommand::Pause)
+        );
+        assert_eq!(
+            parse_phrase_transport("продолжи воспроизведение"),
+            Some(TransportCommand::Play)
+        );
+        assert_eq!(
+            parse_phrase_transport("следующий трек"),
+            Some(TransportCommand::Next)
+        );
+        assert_eq!(
+            parse_phrase_transport("предыдущий трек"),
+            Some(TransportCommand::Previous)
+        );
+        assert_eq!(parse_phrase_transport("какая погода"), None);
+    }
 }

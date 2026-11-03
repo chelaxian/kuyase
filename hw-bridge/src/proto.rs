@@ -19,6 +19,62 @@ pub fn push_len_delimited(buf: &mut Vec<u8>, field_num: u32, payload: &[u8]) {
     buf.extend_from_slice(payload);
 }
 
+pub fn frame_quasar_packet(payload: &[u8]) -> Vec<u8> {
+    let mut framed = Vec::with_capacity(4 + payload.len());
+    framed.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    framed.extend_from_slice(payload);
+    framed
+}
+
+/// QuasarMessage{3: AliceState{2: transcript, 7: request_id, 15: {2: final}}}
+/// is what a real aliced publishes when the station recognises a phrase. Luna
+/// turns it into `/speech/next` events and the AirPlay plugin executes the
+/// transport command. The emulator has no recogniser, so an injected phrase is
+/// rendered into the same message.
+pub fn build_alice_state_event(
+    phase: Option<u64>,
+    transcript: &str,
+    request_id: &str,
+    final_flag: bool,
+) -> Vec<u8> {
+    let mut state = Vec::new();
+    if let Some(phase) = phase {
+        push_varint(&mut state, 1 << 3);
+        push_varint(&mut state, phase);
+    }
+    if !transcript.is_empty() {
+        push_len_delimited(&mut state, 2, transcript.as_bytes());
+    }
+    if !request_id.is_empty() {
+        push_len_delimited(&mut state, 7, request_id.as_bytes());
+    }
+    if final_flag {
+        let mut request = Vec::new();
+        if !transcript.is_empty() {
+            push_len_delimited(&mut request, 1, transcript.as_bytes());
+        }
+        push_varint(&mut request, 2 << 3);
+        push_varint(&mut request, 1);
+        push_len_delimited(&mut state, 15, &request);
+    }
+
+    let mut message = Vec::new();
+    push_len_delimited(&mut message, 3, &state);
+    message
+}
+
+/// The recognition result for a phrase. Sent after a `listening` frame: aliced
+/// replays retained state on a fresh IPC connection, and Luna marks that first
+/// frame as an initial snapshot, which the AirPlay plugin deliberately ignores.
+pub fn build_alice_voice_event(transcript: &str, request_id: &str) -> Vec<u8> {
+    build_alice_state_event(None, transcript, request_id, true)
+}
+
+/// AliceState phase 1 = LISTENING, the frame that precedes a recognition.
+pub fn build_alice_listening_event() -> Vec<u8> {
+    build_alice_state_event(Some(1), "", "", false)
+}
+
 pub fn build_yio_audio_frame(doa_deg: f32, target_rms: u16, seq: u64) -> Vec<u8> {
     let n_samples = 256usize;
     let mut base_samples = vec![0i16; n_samples + 16];
@@ -101,10 +157,7 @@ pub fn build_yio_audio_frame(doa_deg: f32, target_rms: u16, seq: u64) -> Vec<u8>
     let mut qmsg = Vec::with_capacity(channels_pb.len() + 16);
     push_len_delimited(&mut qmsg, 158, &channels_pb);
 
-    let mut framed = Vec::with_capacity(4 + qmsg.len());
-    framed.extend_from_slice(&(qmsg.len() as u32).to_le_bytes());
-    framed.extend_from_slice(&qmsg);
-    framed
+    frame_quasar_packet(&qmsg)
 }
 
 enum PbField<'a> {
@@ -311,7 +364,7 @@ pub fn decode_quasar_remoting_packet(payload: &[u8]) -> Result<DecodedRemoting, 
             }
 
             return match method_id {
-                Some(6) => Ok(DecodedRemoting::CancelDialog),
+                Some(1 | 3 | 6) => Ok(DecodedRemoting::CancelDialog),
                 Some(14) => Ok(DecodedRemoting::StopTts),
                 Some(18) => {
                     if vocalize_text.is_empty() {
@@ -423,20 +476,67 @@ pub fn decode_quasar_io_control_packet(payload: &[u8]) -> Result<DecodedIoHubPac
 mod tests {
     use super::*;
 
+    fn pb_field<'a>(buf: &'a [u8], wanted: u32) -> Option<PbField<'a>> {
+        let mut pos = 0usize;
+        while let Some((number, value)) = next_pb_field(buf, &mut pos).ok().flatten() {
+            if number == wanted {
+                return Some(value);
+            }
+        }
+        None
+    }
+
+    fn pb_bytes<'a>(buf: &'a [u8], wanted: u32) -> Option<&'a [u8]> {
+        match pb_field(buf, wanted) {
+            Some(PbField::Bytes(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    fn pb_varint(buf: &[u8], wanted: u32) -> Option<u64> {
+        match pb_field(buf, wanted) {
+            Some(PbField::Varint(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    /// Luna decodes aliced frames as QuasarMessage{3: AliceState{1: phase,
+    /// 2: transcript, 7: request_id, 15: {2: final}}}. An injected phrase must
+    /// produce exactly that, or /speech/next never yields an event.
+    #[test]
+    fn test_build_alice_events() {
+        let listening = build_alice_listening_event();
+        let state = pb_bytes(&listening, 3).expect("message.state");
+        assert_eq!(pb_varint(state, 1), Some(1), "LISTENING phase");
+        assert_eq!(pb_bytes(state, 2), None, "no transcript in listening");
+
+        let voice = build_alice_voice_event("пауза", "emu-7");
+        let state = pb_bytes(&voice, 3).expect("message.state");
+        assert_eq!(pb_varint(state, 1), None, "no phase means recognition");
+        assert_eq!(pb_bytes(state, 2), Some("пауза".as_bytes()));
+        assert_eq!(pb_bytes(state, 7), Some(b"emu-7".as_slice()));
+        let request = pb_bytes(state, 15).expect("state.request");
+        assert_eq!(pb_varint(request, 2), Some(1), "final flag");
+    }
+
     #[test]
     fn test_decode_cancel_dialog_and_vocalize() {
-        let mut alice_method = Vec::new();
-        alice_method.extend_from_slice(&[0x08, 0x06]); // CANCEL_DIALOG_AND_CLEAR_QUEUE (6)
-        let mut remoting = Vec::new();
-        push_len_delimited(&mut remoting, 7, b"AliceCapability");
-        push_len_delimited(&mut remoting, 8, &alice_method);
-        let mut qmsg = Vec::new();
-        push_len_delimited(&mut qmsg, 210, &remoting);
+        // 1 = CANCEL_DIALOG, 3 = STOP_CONVERSATION (sent by Luna), 6 = CANCEL_DIALOG_AND_CLEAR_QUEUE
+        for method in [1u8, 3, 6] {
+            let mut alice_method = Vec::new();
+            alice_method.extend_from_slice(&[0x08, method]);
+            let mut remoting = Vec::new();
+            push_len_delimited(&mut remoting, 7, b"AliceCapability");
+            push_len_delimited(&mut remoting, 8, &alice_method);
+            let mut qmsg = Vec::new();
+            push_len_delimited(&mut qmsg, 210, &remoting);
 
-        assert_eq!(
-            decode_quasar_remoting_packet(&qmsg),
-            Ok(DecodedRemoting::CancelDialog)
-        );
+            assert_eq!(
+                decode_quasar_remoting_packet(&qmsg),
+                Ok(DecodedRemoting::CancelDialog),
+                "method {method} should decode as CancelDialog"
+            );
+        }
 
         let mut voc_dir = Vec::new();
         push_len_delimited(&mut voc_dir, 1, "Привет".as_bytes());

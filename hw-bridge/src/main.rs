@@ -68,6 +68,7 @@ fn main() {
     }
     leds::spawn_native_led_animator(state.clone());
     audio::spawn_alsa_loopback_capture(state.clone());
+    state::spawn_volume_file_watcher(state.clone());
     input::spawn_serial_console_watcher();
 
     bridge_server::run_server(state);

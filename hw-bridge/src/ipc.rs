@@ -1,13 +1,13 @@
 use crate::audio::play_expressive_tts_to_alsa;
 use crate::proto::{
     build_yio_audio_frame, decode_quasar_io_control_packet, decode_quasar_remoting_packet,
-    DecodedIoHubPacket, DecodedRemoting,
+    frame_quasar_packet, DecodedIoHubPacket, DecodedRemoting,
 };
 use crate::state::{AliceState, BridgeState};
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -50,6 +50,41 @@ pub fn spawn_yio_audio_server(state: Arc<BridgeState>) {
     });
 }
 
+/// Clients subscribed to aliced's event stream (Luna's `/speech/next`). The
+/// emulator has no recogniser, so injected phrases are pushed to them as
+/// regular AliceState frames - the same shape real aliced emits.
+static SPEECH_WRITERS: OnceLock<Mutex<Vec<(u64, std::net::TcpStream)>>> = OnceLock::new();
+static NEXT_SPEECH_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
+
+fn speech_writers() -> &'static Mutex<Vec<(u64, std::net::TcpStream)>> {
+    SPEECH_WRITERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+pub fn speech_subscribers() -> usize {
+    speech_writers().lock().map(|w| w.len()).unwrap_or(0)
+}
+
+fn broadcast_frame(frame: Vec<u8>) {
+    let Ok(mut clients) = speech_writers().lock() else {
+        return;
+    };
+    // A write failure means the reader is gone; drop it so the next phrase does
+    // not keep trying a dead socket.
+    clients.retain_mut(|(_, client)| client.write_all(&frame).is_ok());
+}
+
+pub fn broadcast_alice_speech(transcript: &str, request_id: &str) {
+    // LISTENING and the recognition travel in one write: Luna marks the first
+    // frame of a fresh IPC connection as replayed state (initial snapshot) and
+    // the plugin ignores those, so the recognition must not be that frame.
+    let mut buf = frame_quasar_packet(&crate::proto::build_alice_listening_event());
+    buf.extend(frame_quasar_packet(&crate::proto::build_alice_voice_event(
+        transcript,
+        request_id,
+    )));
+    broadcast_frame(buf);
+}
+
 pub fn spawn_aliced_ipc_server(state: Arc<BridgeState>) {
     thread::spawn(move || {
         let Ok(listener) = TcpListener::bind("127.0.0.1:9875") else {
@@ -59,6 +94,13 @@ pub fn spawn_aliced_ipc_server(state: Arc<BridgeState>) {
         state.log("Listening on 127.0.0.1:9875 (aliced strict QuasarMessage.remoting IPC)");
         for stream in listener.incoming().flatten() {
             let st = state.clone();
+            let client_id = NEXT_SPEECH_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
+            if let Ok(writer) = stream.try_clone() {
+                let _ = writer.set_write_timeout(Some(Duration::from_millis(200)));
+                if let Ok(mut clients) = speech_writers().lock() {
+                    clients.push((client_id, writer));
+                }
+            }
             thread::spawn(move || {
                 let mut s = stream;
                 let mut len_buf = [0u8; 4];
@@ -137,6 +179,9 @@ pub fn spawn_aliced_ipc_server(state: Arc<BridgeState>) {
                             ));
                         }
                     }
+                }
+                if let Ok(mut clients) = speech_writers().lock() {
+                    clients.retain(|(id, _)| *id != client_id);
                 }
             });
         }

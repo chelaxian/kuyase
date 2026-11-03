@@ -373,6 +373,8 @@ pub fn detect_board_from_tree(tree: &RootfsTree) -> String {
 
     if tree.get("lib/firmware/bergamot-acm8625.cfg").is_some() {
         "bergamot".to_string()
+    } else if tree.get("lib/firmware/mango-acm8625.cfg").is_some() {
+        "mango".to_string()
     } else if tree.get("etc/init.d/S61leds_brightness").is_some() {
         "yandexmini2".to_string()
     } else if tree.get("boot/yandex-cucumber-i2ctop-overlay.dtb").is_some() {
@@ -413,6 +415,7 @@ pub fn sanitize_tree(tree: &mut RootfsTree) {
         "etc/dhcpcd.exit-hook",
         "etc/unbound/unbound.conf.head",
         "etc/init.d/S99zdropbear",
+        "etc/init.d/S99zalicebridge-ssh",
         "etc/init.d/S99z_airplay",
         "etc/init.d/S99zz_jarvis",
         "etc/init.d/S99alinad",
@@ -446,6 +449,12 @@ pub fn sanitize_tree(tree: &mut RootfsTree) {
                     drop_entry = true;
                     break;
                 }
+            }
+        }
+        if !drop_entry && k.starts_with("etc/init.d/S99") {
+            let lc = k.to_ascii_lowercase();
+            if lc.contains("dropbear") || lc.contains("ssh") || lc.contains("alicebridge") {
+                drop_entry = true;
             }
         }
         // 3. Check *.db / *.sqlite* under etc/, var/, root/

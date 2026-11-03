@@ -18,8 +18,7 @@ use crate::leds::parse_led_pattern_str;
 use crate::state::BoardProfile;
 pub use protocol::{AmplifierSlotState, UltrasoundState};
 use std::collections::BTreeMap;
-use std::fs::{self, File};
-use std::io::Read;
+use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -449,11 +448,22 @@ impl LedRingDevice for SysfsFbLedRing {
 
         let mut ring_pixels = vec![[0u8; 3]; self.leds];
         let fb_path = self.ring_fb_path();
-        if let Ok(mut f) = File::open(&fb_path) {
-            let mut raw = vec![0u8; self.leds * 3];
-            if f.read_exact(&mut raw).is_ok() {
-                for i in 0..self.leds {
-                    ring_pixels[i] = [raw[i * 3], raw[i * 3 + 1], raw[i * 3 + 2]];
+        if let Ok(raw) = fs::read(&fb_path) {
+            if raw.len() == (self.leds + 1) * 4 || raw.len() == self.leds * 4 {
+                // 32-bpp RGBW Gowin framebuffer frame (e.g., Station 2 89x1 = 356 bytes)
+                for (i, slot) in ring_pixels.iter_mut().enumerate().take(self.leds) {
+                    let base = i * 4;
+                    let w = raw[base + 3] / 2;
+                    *slot = [
+                        raw[base].saturating_add(w),
+                        raw[base + 1].saturating_add(w),
+                        raw[base + 2].saturating_add(w),
+                    ];
+                }
+            } else if raw.len() >= self.leds * 3 {
+                for (i, slot) in ring_pixels.iter_mut().enumerate().take(self.leds) {
+                    let base = i * 3;
+                    *slot = [raw[base], raw[base + 1], raw[base + 2]];
                 }
             }
         }
@@ -562,7 +572,18 @@ impl AuxLightDevice for LogoSysfsFbDevice {
             return out;
         }
         if let Ok(raw) = fs::read("/dev/fb1") {
-            if raw.len() >= self.count * 3 && raw[..self.count * 3].iter().any(|&b| b > 0) {
+            if raw.len() == self.count * 4 && raw.iter().any(|&b| b > 0) {
+                for i in 0..self.count {
+                    let base = i * 4;
+                    let w = raw[base + 3] / 2;
+                    out[i] = [
+                        raw[base].saturating_add(w),
+                        raw[base + 1].saturating_add(w),
+                        raw[base + 2].saturating_add(w),
+                    ];
+                }
+                return out;
+            } else if raw.len() >= self.count * 3 && raw[..self.count * 3].iter().any(|&b| b > 0) {
                 for i in 0..self.count {
                     let base = i * 3;
                     out[i] = [raw[base], raw[base + 1], raw[base + 2]];
@@ -1711,7 +1732,9 @@ impl BoardPeripherals {
         } else {
             let (fallback_fb, drv_label) = match slug {
                 "orion" => ("/dev/fb2".to_string(), "framebuffer"),
-                "cucumber" | "station2" | "bergamot" => ("/dev/fb0".to_string(), "framebuffer"),
+                "cucumber" | "station2" | "bergamot" | "mango" => {
+                    ("/dev/fb0".to_string(), "framebuffer")
+                }
                 _ => ("/dev/fb0".to_string(), "sysfs"),
             };
             Box::new(SysfsFbLedRing {
