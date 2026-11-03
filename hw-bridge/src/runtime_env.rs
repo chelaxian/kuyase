@@ -24,6 +24,8 @@ extern "C" {
     fn dup2(oldfd: i32, newfd: i32) -> i32;
     fn close(fd: i32) -> i32;
     fn unlink(pathname: *const u8) -> i32;
+    fn chown(pathname: *const u8, owner: u32, group: u32) -> i32;
+    fn chmod(pathname: *const u8, mode: u32) -> i32;
     fn _exit(status: i32) -> !;
 }
 
@@ -283,10 +285,12 @@ fn run_quasar_launcher2_stub() -> ! {
 pub enum StubAppletKind {
     QuasarLauncher2,
     IdleDaemon(String),
+    DbusStub,
 }
 
 /// Classifies `argv` to determine whether `qemu-hw-bridge` was invoked as a `Stub Mode`
-/// lifecycle applet (`quasar_launcher2`, `maind`, or `begemot`).
+/// lifecycle applet (`quasar_launcher2`, `maind`, or `begemot`) or `Full Mode` D-Bus service
+/// helper (`--dbus-stub`).
 pub fn classify_stub_applet_args(args: &[String]) -> Option<StubAppletKind> {
     let arg0 = args.first().map(|s| s.as_str()).unwrap_or("");
     let arg0_base = Path::new(arg0)
@@ -295,6 +299,9 @@ pub fn classify_stub_applet_args(args: &[String]) -> Option<StubAppletKind> {
         .unwrap_or(arg0);
     let arg1 = args.get(1).map(|s| s.as_str()).unwrap_or("");
 
+    if arg1 == "--dbus-stub" {
+        return Some(StubAppletKind::DbusStub);
+    }
     if arg0_base == "quasar_launcher2" || arg1 == "--quasar-launcher2-stub" {
         return Some(StubAppletKind::QuasarLauncher2);
     }
@@ -311,8 +318,8 @@ pub fn classify_stub_applet_args(args: &[String]) -> Option<StubAppletKind> {
     None
 }
 
-/// Dispatches `quasar_launcher2` or `maind`/`begemot` idle stubs when `qemu-hw-bridge` is
-/// invoked via bind-mount or `/tmp/.kuyase-stubs/*`. Returns `true` if handled.
+/// Dispatches `quasar_launcher2`, `maind`/`begemot` idle stubs, or `--dbus-stub` when
+/// `qemu-hw-bridge` is invoked via bind-mount or `/tmp/.kuyase-stubs/*`. Returns `true` if handled.
 pub fn maybe_run_stub_applet() -> bool {
     let args: Vec<String> = env::args().collect();
     match classify_stub_applet_args(&args) {
@@ -321,6 +328,12 @@ pub fn maybe_run_stub_applet() -> bool {
         }
         Some(StubAppletKind::IdleDaemon(name)) => {
             run_idle_daemon_stub(&name);
+        }
+        Some(StubAppletKind::DbusStub) => {
+            set_process_comm("dbus-bluez-stub");
+            setup_stub_signals(false);
+            detach_stdio_and_extra_fds();
+            crate::dbus_stub::run_dbus_stub_applet();
         }
         None => false,
     }
@@ -652,16 +665,204 @@ fn ensure_quasar_launcher2_stub_running() {
     }
 }
 
+/// Stage 1 of `Full Mode` D-Bus / BlueZ initialization:
+/// Unifies `/run` and `/var/run` via symlink (`/var/run -> /run`) instead of leaving two separate
+/// `tmpfs` mounts.
+///
+/// Why this is required:
+/// Firmware `dbus-daemon` and `sdbus-c++` (`libsystemd` `sd-bus` inside `maind --platformd`)
+/// reference `/run/dbus/system_bus_socket` and `/var/run/dbus/system_bus_socket` interchangeably.
+/// If `/run` and `/var/run` are separate `tmpfs` instances, `sdbus-c++` fails to open the bus socket
+/// and terminates `maind --platformd` with:
+/// `sdbus::Error: [org.freedesktop.DBus.Error.FileNotFound] Failed to open bus (No such file or directory)`.
+pub fn ensure_unified_var_run_under(root: &Path) {
+    let run_dir = root.join("run");
+    let run_dbus = run_dir.join("dbus");
+    let run_avahi = run_dir.join("avahi");
+    let _ = fs::create_dir_all(&run_dbus);
+    let _ = fs::create_dir_all(&run_avahi);
+
+    #[cfg(target_os = "linux")]
+    if root == Path::new("/") {
+        unsafe {
+            let _ = chown(b"/run/dbus\0".as_ptr(), 85, 85);
+            let _ = chown(b"/run/avahi\0".as_ptr(), 86, 86);
+        }
+    }
+
+    let var_dir = root.join("var");
+    let _ = fs::create_dir_all(&var_dir);
+    let var_run = var_dir.join("run");
+
+    if root == Path::new("/") && is_path_mounted("/var/run") {
+        let _ = Command::new("umount")
+            .arg("/var/run")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if is_path_mounted("/var/run") {
+            let _ = Command::new("umount")
+                .args(["-l", "/var/run"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+
+    let target_for_link = if root == Path::new("/") {
+        PathBuf::from("/run")
+    } else {
+        run_dir.clone()
+    };
+
+    let is_valid_symlink = fs::symlink_metadata(&var_run)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+        && fs::read_link(&var_run)
+            .map(|t| t == target_for_link || t == Path::new("/run"))
+            .unwrap_or(false);
+
+    if !is_valid_symlink {
+        if let Ok(meta) = fs::symlink_metadata(&var_run) {
+            if meta.is_dir() && !meta.file_type().is_symlink() {
+                if let Ok(entries) = fs::read_dir(&var_run) {
+                    for entry in entries.flatten() {
+                        let dst = run_dir.join(entry.file_name());
+                        if !dst.exists() {
+                            let _ = fs::rename(entry.path(), &dst);
+                        }
+                    }
+                }
+                let _ = fs::remove_dir_all(&var_run);
+            } else {
+                let _ = fs::remove_file(&var_run);
+            }
+        }
+        #[cfg(unix)]
+        {
+            let _ = std::os::unix::fs::symlink(&target_for_link, &var_run);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = fs::create_dir_all(&var_run);
+        }
+    }
+
+    let usr_local_var_run = root.join("usr/local/var/run");
+    if root.join("usr/local").exists() || root == Path::new("/") {
+        let _ = fs::create_dir_all(&usr_local_var_run);
+        let usr_local_dbus = usr_local_var_run.join("dbus");
+        if !usr_local_dbus.exists() && fs::symlink_metadata(&usr_local_dbus).is_err() {
+            #[cfg(unix)]
+            {
+                let dbus_target = if root == Path::new("/") {
+                    PathBuf::from("/run/dbus")
+                } else {
+                    run_dbus
+                };
+                let _ = std::os::unix::fs::symlink(dbus_target, &usr_local_dbus);
+            }
+        }
+    }
+}
+
+/// Stage 2 of `Full Mode` D-Bus / BlueZ initialization:
+/// Restores `04750` (`root:dbus`, `0:85`) permissions on `/usr/libexec/dbus-daemon-launch-helper`.
+///
+/// Why this is required:
+/// `dbus-daemon --system` strictly checks that `/usr/libexec/dbus-daemon-launch-helper` is owned
+/// by `0:85` (`root:dbus`) and has mode `04750` (`setuid root`, group-executable by `dbus`,
+/// no world permissions). Otherwise activation fails and `maind --platformd` aborts with:
+/// `sdbus::Error: [org.freedesktop.DBus.Error.Spawn.PermissionsInvalid] The permission of the setuid helper is not correct`.
+/// Note: on Linux, `chown` clears the `S_ISUID` (`04000`) bit on regular files, so `chown(0, 85)`
+/// must always be executed before `chmod(04750)`.
+pub fn ensure_dbus_launch_helper_permissions_under(root: &Path) {
+    let helper = root.join("usr/libexec/dbus-daemon-launch-helper");
+    if !helper.exists() {
+        return;
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Some(path_str) = helper.to_str() {
+        let mut c_path = path_str.as_bytes().to_vec();
+        c_path.push(0);
+        unsafe {
+            let _ = chown(c_path.as_ptr(), 0, 85);
+            let _ = chmod(c_path.as_ptr(), 0o4750);
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&helper, fs::Permissions::from_mode(0o4750));
+    }
+}
+
+/// Stage 3 of `Full Mode` D-Bus / BlueZ initialization:
+/// Prepares permissive D-Bus system bus configuration and redirects `org.bluez.service` activation
+/// to `qemu-hw-bridge --dbus-stub` so `dbus-daemon` never spawns the crashing `/usr/libexec/bluetooth/bluetoothd`
+/// binary in QEMU (where no hardware Bluetooth HCI controller exists).
+pub fn ensure_dbus_system_config_under(root: &Path) {
+    let tmp_dir = root.join("tmp");
+    let _ = fs::create_dir_all(&tmp_dir);
+    let bus_conf = tmp_dir.join("kuyase-bus.conf");
+    const STANDALONE_BUS_CONF: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>system</type>
+  <listen>unix:path=/run/dbus/system_bus_socket</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow user="*"/>
+    <allow own="*"/>
+    <allow send_type="method_call"/>
+    <allow send_destination="*"/>
+    <allow receive_sender="*"/>
+  </policy>
+</busconfig>
+"#;
+    let _ = fs::write(&bus_conf, STANDALONE_BUS_CONF);
+
+    let dbus_system_d = root.join("etc/dbus-1/system.d");
+    if root.join("etc/dbus-1").exists() || root == Path::new("/") {
+        let _ = fs::create_dir_all(&dbus_system_d);
+        const ALLOW_ALL_POLICY: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <policy context="default">
+    <allow user="*"/>
+    <allow own="*"/>
+    <allow send_type="method_call"/>
+    <allow send_destination="*"/>
+    <allow receive_sender="*"/>
+  </policy>
+</busconfig>
+"#;
+        let _ = fs::write(dbus_system_d.join("kuyase-allow-all.conf"), ALLOW_ALL_POLICY);
+    }
+
+    let services_dir = root.join("usr/share/dbus-1/system-services");
+    if services_dir.exists() {
+        const BLUEZ_SERVICE_STUB: &str = "[D-BUS Service]\nName=org.bluez\nExec=/usr/local/bin/qemu-hw-bridge --dbus-stub\nUser=root\n";
+        let _ = fs::write(services_dir.join("org.bluez.service"), BLUEZ_SERVICE_STUB);
+    }
+}
+
 /// Prepares all guest runtime environment stubs on `qemu-hw-bridge` startup so existing
-/// `work/*-system.ext4` images support unmodified `/system/vendor/quasar/q` commands without
-/// rebuilding `.ext4` images.
-pub fn prepare_runtime_environment(_board_slug: &str, full_mode: bool) {
+/// `work/*-system.ext4` images support unmodified `/system/vendor/quasar/q` commands and
+/// `Full Mode` (`quasar.mode=full`) D-Bus / BlueZ initialization without rebuilding `.ext4` images.
+pub fn prepare_runtime_environment(board_slug: &str, full_mode: bool) {
     let root = Path::new("/");
+    ensure_unified_var_run_under(root);
+    ensure_dbus_launch_helper_permissions_under(root);
+    ensure_dbus_system_config_under(root);
     ensure_unified_log_symlinks_under(root);
     ensure_platform_sysfs_nodes_under(root);
     ensure_linkplay_fnvram_under(root);
     ensure_fallback_set_volume_sh_under(root);
     ensure_virtual_wlan0_netdev();
+    crate::dbus_stub::ensure_system_dbus_and_bluez_stub(board_slug, full_mode);
     if !full_mode {
         ensure_quasar_launcher2_stub_running();
     }
@@ -718,9 +919,53 @@ mod tests {
             Some(StubAppletKind::IdleDaemon("begemot".to_string()))
         );
         assert_eq!(
+            classify_stub_applet_args(&[
+                "/usr/local/bin/qemu-hw-bridge".to_string(),
+                "--dbus-stub".to_string()
+            ]),
+            Some(StubAppletKind::DbusStub)
+        );
+        assert_eq!(
             classify_stub_applet_args(&["/usr/local/bin/qemu-hw-bridge".to_string()]),
             None
         );
+    }
+
+    #[test]
+    fn test_unified_var_run_and_dbus_config_generation() {
+        let root = make_temp_root("var-run-dbus");
+        // Simulate a legacy separate `/var/run` directory with an existing file inside.
+        fs::create_dir_all(root.join("var/run")).unwrap();
+        fs::write(root.join("var/run/legacy.pid"), "123\n").unwrap();
+        fs::create_dir_all(root.join("usr/libexec")).unwrap();
+        fs::write(root.join("usr/libexec/dbus-daemon-launch-helper"), b"ELF").unwrap();
+        fs::create_dir_all(root.join("etc/dbus-1")).unwrap();
+        fs::create_dir_all(root.join("usr/share/dbus-1/system-services")).unwrap();
+
+        ensure_unified_var_run_under(&root);
+        ensure_dbus_launch_helper_permissions_under(&root);
+        ensure_dbus_system_config_under(&root);
+
+        assert!(root.join("run/dbus").is_dir());
+        assert!(root.join("run/avahi").is_dir());
+        // Existing files in `/var/run` must be migrated into `/run`.
+        assert_eq!(
+            fs::read_to_string(root.join("run/legacy.pid")).unwrap(),
+            "123\n"
+        );
+        #[cfg(unix)]
+        {
+            let meta = fs::symlink_metadata(root.join("var/run")).unwrap();
+            assert!(meta.file_type().is_symlink());
+        }
+        assert!(root.join("tmp/kuyase-bus.conf").exists());
+        assert!(root.join("etc/dbus-1/system.d/kuyase-allow-all.conf").exists());
+        let bluez_svc =
+            fs::read_to_string(root.join("usr/share/dbus-1/system-services/org.bluez.service"))
+                .unwrap();
+        assert!(bluez_svc.contains("--dbus-stub"));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 mod audio;
 mod bridge_server;
+mod dbus_stub;
 mod devices;
 mod input;
 mod ipc;
