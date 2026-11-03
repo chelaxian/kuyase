@@ -581,6 +581,95 @@ pub fn decode_quasar_io_control_packet(payload: &[u8]) -> Result<DecodedIoHubPac
     Err("missing QuasarMessage.io_control (88) or io_hub_message (183)".to_string())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodedGlagolIpcPacket {
+    DiscoveryRequest(GlagolDiscoveryRequest),
+    ClusterMessage(GlagolClusterMessage),
+    ServiceReady(String),
+    OtherQuasarMessage(u32),
+}
+
+/// Decodes a `QuasarMessage` arriving on `glagold` (`127.0.0.1:9899`) in either legacy direct-field
+/// (`<= 0.367`, e.g. `ca 0b 02 42 00` for `glagol_discovery_request = 185`) or modern `LITE_RUNTIME`
+/// envelope (`>= 0.368`, e.g. `e2 0f 02 42 00 e8 0f b9 01` with `payload = 252, type = 253 (185)`)
+/// wire format, returning both the decoded packet and the peer's wire format.
+pub fn decode_quasar_glagol_packet_with_format(
+    payload: &[u8],
+) -> Result<(DecodedGlagolIpcPacket, QuasarWireFormat), String> {
+    let qmsg = QuasarMessage::decode(payload)?;
+    let wf = qmsg.wire_format;
+
+    if let Some(disc_buf) = qmsg.find_payload(QuasarMessageType::GLAGOL_DISCOVERY_REQUEST) {
+        let req = GlagolDiscoveryRequest::decode(disc_buf)?;
+        return Ok((DecodedGlagolIpcPacket::DiscoveryRequest(req), wf));
+    }
+
+    if let Some(cluster_buf) = qmsg.find_payload(QuasarMessageType::GLAGOL_CLUSTER_MESSAGE) {
+        let msg = GlagolClusterMessage::decode(cluster_buf)?;
+        return Ok((DecodedGlagolIpcPacket::ClusterMessage(msg), wf));
+    }
+
+    if let Some(svc_buf) = qmsg.find_payload(QuasarMessageType::SERVICE_NAME_READY) {
+        return Ok((
+            DecodedGlagolIpcPacket::ServiceReady(String::from_utf8_lossy(svc_buf).into_owned()),
+            wf,
+        ));
+    }
+
+    if let Some((first_type, _)) = qmsg.entries.first() {
+        return Ok((DecodedGlagolIpcPacket::OtherQuasarMessage(*first_type), wf));
+    }
+
+    Err("empty QuasarMessage on glagold (:9899)".to_string())
+}
+
+/// Builds a framed `QuasarMessage` containing `GlagolDiscoveryResult` (`type = 187`) in `wire_format`.
+pub fn build_glagol_discovery_result_packet(
+    result: &GlagolDiscoveryResult,
+    wire_format: QuasarWireFormat,
+) -> Vec<u8> {
+    let qmsg = QuasarMessage::encode_with_format(
+        QuasarMessageType::GLAGOL_DISCOVERY_RESULT,
+        &result.to_bytes(),
+        wire_format,
+    );
+    frame_quasar_packet(&qmsg)
+}
+
+/// Builds a framed `QuasarMessage` containing `GlagoldState` (`type = 82`) in `wire_format`.
+pub fn build_glagold_state_packet(
+    state_proto: &GlagoldState,
+    wire_format: QuasarWireFormat,
+) -> Vec<u8> {
+    let qmsg = QuasarMessage::encode_with_format(
+        QuasarMessageType::GLAGOLD_STATE,
+        &state_proto.to_bytes(),
+        wire_format,
+    );
+    frame_quasar_packet(&qmsg)
+}
+
+/// Builds a framed `QuasarMessage` containing `LogMessage` (`type = 184`, field `4` `msg`) in `wire_format`.
+///
+/// `/system/vendor/quasar/q glagol-connections` (`maind --glagol-connections`) sends
+/// `GlagolDiscoveryRequest { debug_connections = 8 }` (`type = 185`) to `127.0.0.1:9899` and blocks
+/// specifically waiting for `QuasarMessage` `type = 184` (`TYPE_LOG_MESSAGE`), parsing `LogMessage.msg`
+/// as JSON and printing it to stdout before exiting with code `0`.
+pub fn build_glagol_log_message_packet(
+    json_msg: &str,
+    wire_format: QuasarWireFormat,
+) -> Vec<u8> {
+    let log_msg = LogMessage {
+        msg: Some(json_msg.to_string()),
+    };
+    let qmsg = QuasarMessage::encode_with_format(
+        QuasarMessageType::LOG_MESSAGE,
+        &log_msg.to_bytes(),
+        wire_format,
+    );
+    frame_quasar_packet(&qmsg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,6 +7,7 @@ use crate::proto::{
     DecodedRemoting, QuasarMessage, QuasarWireFormat,
 };
 use crate::state::{AliceState, BridgeState};
+pub use crate::glagol::spawn_glagold_ipc_server;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicU64, Ordering};
