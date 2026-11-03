@@ -338,17 +338,28 @@ fn run_single_headless_board(
             ));
         }
 
-        if let Some(ref cmd) = opts.exec_cmd {
+        if let Some(ref raw_cmd) = opts.exec_cmd {
+            let resolved_cmd = if let Some(file_path) = raw_cmd.strip_prefix('@') {
+                std::fs::read_to_string(file_path)
+                    .map_err(|e| format!("failed to read --exec script '{}': {}", file_path, e))?
+                    .replace("\r\n", "\n")
+            } else {
+                raw_cmd.replace("\r\n", "\n")
+            };
             println!(
                 "=== [{}] {} ===",
                 cfg.board, refreshed_state.board_name
             );
-            let wrapped_cmd = format!(
-                "( {} ); __kuyase_rc=$?; printf \"\\n__KUYASE_EXIT_CODE=%d\\n\" \"$__kuyase_rc\"",
-                cmd
-            );
-            let exec_out = adb.shell(&wrapped_cmd, Duration::from_secs(60))?;
-            let mut exit_code: i32 = 0;
+            let exec_out = if resolved_cmd.len() > 1800 {
+                adb.shell(&resolved_cmd, Duration::from_secs(300))?
+            } else {
+                let wrapped_cmd = format!(
+                    "(\n{}\n); __kuyase_rc=$?; printf \"\\n__KUYASE_EXIT_CODE=%d\\n\" \"$__kuyase_rc\"",
+                    resolved_cmd
+                );
+                adb.shell(&wrapped_cmd, Duration::from_secs(300))?
+            };
+            let mut exit_code: i32 = 1;
             let mut clean_lines = Vec::new();
             for line in exec_out.lines() {
                 if let Some(rest) = line.trim().strip_prefix("__KUYASE_EXIT_CODE=") {
@@ -361,13 +372,35 @@ fn run_single_headless_board(
             if !clean_out.trim().is_empty() {
                 println!("{}", clean_out.trim_end());
             }
-            let _ = bridge.request_state()?;
+            let post_state = bridge.request_state()?;
             if exit_code != 0 {
                 println!("-> [FAIL] {} (exit code {})\n", cfg.board, exit_code);
                 bridge.close();
                 return Err(format!(
                     "guest command on '{}' exited with code {}",
                     cfg.board, exit_code
+                ));
+            }
+            if post_state.ipc_error_count > 0 {
+                println!(
+                    "-> [FAIL] {} (ipc_error_count={})\n",
+                    cfg.board, post_state.ipc_error_count
+                );
+                bridge.close();
+                return Err(format!(
+                    "guest command on '{}' produced {} IPC error(s)",
+                    cfg.board, post_state.ipc_error_count
+                ));
+            }
+            if post_state.led_trigger_conflict_count > 0 {
+                println!(
+                    "-> [FAIL] {} (led_trigger_conflict_count={})\n",
+                    cfg.board, post_state.led_trigger_conflict_count
+                );
+                bridge.close();
+                return Err(format!(
+                    "guest command on '{}' produced {} LED trigger conflict(s)",
+                    cfg.board, post_state.led_trigger_conflict_count
                 ));
             }
             println!("-> [PASS] {}\n", cfg.board);

@@ -159,15 +159,17 @@ hostname "qemu-${BOARD}" 2>/dev/null || true
 
 # 2. Ensure loopback is up (eth0 is configured via kernel `ip=dhcp`) and DNS resolver is configured
 ip link set lo up 2>/dev/null || ifconfig lo 127.0.0.1 up 2>/dev/null || true
-if ! grep -q '^nameserver ' /etc/resolv.conf 2>/dev/null; then
-  cat > /tmp/resolv.conf << 'EOF'
+cat > /tmp/resolv.conf << 'EOF'
 nameserver 10.0.2.3
 nameserver 1.1.1.1
 nameserver 8.8.8.8
 EOF
+if ! grep -q '^nameserver ' /etc/resolv.conf 2>/dev/null; then
   rm -f /etc/resolv.conf 2>/dev/null || true
   cp -f /tmp/resolv.conf /etc/resolv.conf 2>/dev/null || ln -sfn /tmp/resolv.conf /etc/resolv.conf 2>/dev/null || true
 fi
+printf 'check_certificate = off\n' > /root/.wgetrc 2>/dev/null || true
+printf 'check_certificate = off\n' > /.wgetrc 2>/dev/null || true
 
 # 2b. Optional LAN NIC. When the host passes a second virtio NIC (52:4b:59:xx,
 # a tap on a dedicated bridge) the speaker lives directly on the physical LAN,
@@ -319,6 +321,7 @@ case "$BOARD" in
   yandexmini)
     printf "Amlogic\0" > /tmp/fake-dt/model
     printf "amlogic, axg\0" > /tmp/fake-dt/compatible
+    printf "axg_s420_v03\0" > /tmp/fake-dt/amlogic-dt-id
     BOARD_NAME="Яндекс Станция Мини 1 (YNDX-0004 / yandexmini)"
     SYSFS_PREFIX="yandexmini"; RING_LEDS=6; LOGO_LEDS=0; AMBILIGHT_LEDS=0; HAS_CLOCK="false"; LED_DRIVER="i2c_sn3236"
     ;;

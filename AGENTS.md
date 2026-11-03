@@ -58,6 +58,8 @@
 - **Локальный IPC стека Quasar (`hw-bridge/src/ipc.rs`, `hw-bridge/src/proto.rs`)**:
   - Все сокеты (`aliced` `:9875`, `yio_audio` `:9850`, `iohub_services` `:9903`) используют фрейминг `[u32_le_len][QuasarMessage protobuf]` без внешних protobuf-зависимостей.
   - Инжекция голоса (`HostCommand::InjectVoice`) открывает окно перехвата `1680 мс` (`Hijack Window`): получение `CANCEL_DIALOG_AND_CLEAR_QUEUE` (`6`) или `STOP_TTS` (`14`) на `:9875` подавляет штатный ответ Алисы и инкрементирует `aliced_hijack_count`.
+- **Сквозные E2E-тесты (`tests_e2e/`)**:
+  - В `tests_e2e/` запрещено писать собственные TCP/ADB-клиенты к эмулятору (`BridgeTcpClient`, `AdbTcpClient`) или вручную воспроизводить шаги установки пакетов вместо запуска оригинальных `install.sh` / `install.ps1`. Все гостевые проверки выполняются исключительно через `kuyase run --headless --board <board> --snapshot --exec "<cmd>"` (где сам `kuyase` контролирует код возврата, `ipc_error_count == 0` и `led_trigger_conflict_count == 0`).
 - **Стиль документации**: Документация репозитория (`README.md`, `DUMP_GUIDE.md`, `CONTEXT.md`, `AGENTS.md`, `llm.txt`) пишется технически лаконично, без эмодзи, с использованием блоков GitHub Alerts (`>[!note]`, `>[!warning]`, `>[!tip]`).
 
 ## Agent skills

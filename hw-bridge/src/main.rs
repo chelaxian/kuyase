@@ -9,9 +9,30 @@ mod state;
 mod tts;
 
 use state::{BoardProfile, BridgeState};
+use std::fs;
 use std::sync::Arc;
 
+fn ensure_guest_network_defaults() {
+    let need_resolv = fs::read_to_string("/etc/resolv.conf")
+        .map(|s| !s.lines().any(|l| l.trim_start().starts_with("nameserver")))
+        .unwrap_or(true);
+    if need_resolv {
+        let resolv = "nameserver 10.0.2.3\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n";
+        let _ = fs::write("/tmp/resolv.conf", resolv);
+        let _ = fs::write("/etc/resolv.conf", resolv);
+    }
+    for wgetrc in ["/root/.wgetrc", "/.wgetrc"] {
+        let has_opt = fs::read_to_string(wgetrc)
+            .map(|s| s.contains("check_certificate"))
+            .unwrap_or(false);
+        if !has_opt {
+            let _ = fs::write(wgetrc, "check_certificate = off\n");
+        }
+    }
+}
+
 fn main() {
+    ensure_guest_network_defaults();
     audio::ensure_alsa_compat_lib();
     let profile = BoardProfile::detect();
 

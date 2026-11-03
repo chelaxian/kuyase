@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
 Пример E2E-теста установщика пакетного менеджера YAM v0.2+ (https://github.com/nyakokitsu/yam):
-скачивает оригинальный install.sh из репозитория YAM, вырезает из него без модификаций
-функции device_identity() и detect_platform() и сверяет результат автоопределения
-с каноническим профилем платы по SoC и device-tree (а не слепо по quasar.cfg,
-где у Станции 2 на Amlogic AXG записано внутреннее имя deviceType="yandexmidi").
+берёт оригинальный install.sh (из локального ../yam/install.sh при наличии либо из репозитория YAM),
+вырезает из него без модификаций функции device_identity() и detect_platform() и сверяет результат
+автоопределения с каноническим профилем платы по SoC и device-tree через
+`kuyase run --headless --board <board> --snapshot --exec`.
 
 Запуск:
   python examples/test_yam_lineup.py              # Все собранные платы в work/
   python examples/test_yam_lineup.py --board station2
-  python examples/test_yam_lineup.py --ref main   # Проверить против ветки main
+  python examples/test_yam_lineup.py --ref main
 """
 
 import argparse
+import os
 import pathlib
 import platform
 import re
@@ -24,9 +25,27 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 YAM_REF_DEFAULT = "main"
 
 
-def fetch_yam_detect_script(ref: str = YAM_REF_DEFAULT) -> str:
+def load_yam_install_sh(ref: str = YAM_REF_DEFAULT) -> str:
+    env_dir = os.environ.get("YAM_REPO_DIR", "").strip()
+    local_candidates = []
+    if env_dir:
+        local_candidates.append(pathlib.Path(env_dir) / "install.sh")
+    local_candidates.append(REPO_ROOT.parent / "yam" / "install.sh")
+
+    if ref == YAM_REF_DEFAULT:
+        for cand in local_candidates:
+            if cand.is_file():
+                print(f"[*] Используется локальный install.sh: {cand}")
+                return cand.read_text(encoding="utf-8").replace("\r\n", "\n")
+
     url = f"https://raw.githubusercontent.com/nyakokitsu/yam/{ref}/install.sh"
     print(f"[*] Скачивание install.sh ({ref}): {url}")
+    with urllib.request.urlopen(url, timeout=15) as resp:
+        return resp.read().decode("utf-8").replace("\r\n", "\n")
+
+
+def fetch_yam_detect_script(ref: str = YAM_REF_DEFAULT) -> str:
+    install_sh = load_yam_install_sh(ref)
     print(
         "[*] Легенда проверки:\n"
         "    - compatible  : строка из /proc/device-tree/compatible (SoC + плата)\n"
@@ -35,18 +54,12 @@ def fetch_yam_detect_script(ref: str = YAM_REF_DEFAULT) -> str:
         "    - yam_profile : профиль, который вернула функция detect_platform() из install.sh\n",
         flush=True,
     )
-    with urllib.request.urlopen(url, timeout=15) as resp:
-        install_sh = resp.read().decode("utf-8")
 
     id_match = re.search(r"(device_identity\(\)\s*\{.*?\n\})", install_sh, re.DOTALL)
     det_match = re.search(r"(detect_platform\(\)\s*\{.*?\n\})", install_sh, re.DOTALL)
     if not id_match or not det_match:
         sys.exit("[ERROR] В install.sh не найдены функции device_identity() / detect_platform()")
 
-    # Обе функции вставляются из install.sh без единого изменения;
-    # эталонный профиль определяется по SoC + совместимости (HackAlice):
-    # - station2 (YNDX-00051, Amlogic AXG, DT `yandex,station-midi`, quasar.cfg `yandexmidi`) -> `yandexstation_2`
-    # - cucumber (YNDX-00054, Станция Миди, Amlogic A5, DT `yandex,cucumber-dvt2`) -> `cucumber`
     return (
         'adb() { shift 3; sh -c "$1"; }\n'
         "DEVICE=local\n"
