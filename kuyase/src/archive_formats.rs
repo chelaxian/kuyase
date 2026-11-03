@@ -365,12 +365,89 @@ pub(crate) fn append_test_cpio_entry(
 }
 
 #[cfg(test)]
+pub(crate) fn build_test_ubifs_ino_node(
+    sqnum: u64,
+    inum: u32,
+    mode: u16,
+    uid: u16,
+    gid: u16,
+    size: u64,
+    inline_data: &[u8],
+) -> Vec<u8> {
+    let len = 160 + inline_data.len();
+    let mut buf = vec![0u8; (len + 7) & !7];
+    buf[0..4].copy_from_slice(&UBIFS_NODE_MAGIC.to_le_bytes());
+    buf[8..16].copy_from_slice(&sqnum.to_le_bytes());
+    buf[16..20].copy_from_slice(&(len as u32).to_le_bytes());
+    buf[20] = ubifs::UBIFS_INO_NODE;
+    buf[24..28].copy_from_slice(&inum.to_le_bytes());
+    buf[48..56].copy_from_slice(&size.to_le_bytes());
+    buf[92..96].copy_from_slice(&1u32.to_le_bytes()); // nlink = 1
+    buf[96..100].copy_from_slice(&(uid as u32).to_le_bytes());
+    buf[100..104].copy_from_slice(&(gid as u32).to_le_bytes());
+    buf[104..108].copy_from_slice(&(mode as u32).to_le_bytes());
+    buf[112..116].copy_from_slice(&(inline_data.len() as u32).to_le_bytes());
+    buf[160..160 + inline_data.len()].copy_from_slice(inline_data);
+    buf
+}
+
+#[cfg(test)]
+pub(crate) fn build_test_ubifs_dent_node(
+    sqnum: u64,
+    parent_inum: u32,
+    target_inum: u32,
+    entry_type: u8,
+    name: &str,
+) -> Vec<u8> {
+    let nb = name.as_bytes();
+    let len = 56 + nb.len() + 1;
+    let mut buf = vec![0u8; (len + 7) & !7];
+    buf[0..4].copy_from_slice(&UBIFS_NODE_MAGIC.to_le_bytes());
+    buf[8..16].copy_from_slice(&sqnum.to_le_bytes());
+    buf[16..20].copy_from_slice(&(len as u32).to_le_bytes());
+    buf[20] = ubifs::UBIFS_DENT_NODE;
+    buf[24..28].copy_from_slice(&parent_inum.to_le_bytes());
+    buf[40..48].copy_from_slice(&(target_inum as u64).to_le_bytes());
+    buf[49] = entry_type;
+    buf[50..52].copy_from_slice(&(nb.len() as u16).to_le_bytes());
+    buf[56..56 + nb.len()].copy_from_slice(nb);
+    buf
+}
+
+#[cfg(test)]
+pub(crate) fn build_test_ubifs_compressed_data_node(
+    sqnum: u64,
+    inum: u32,
+    block_num: u32,
+    uncomp_len: usize,
+    compr_type: u16,
+    compressed_payload: &[u8],
+) -> Vec<u8> {
+    let len = 48 + compressed_payload.len();
+    let mut buf = vec![0u8; (len + 7) & !7];
+    buf[0..4].copy_from_slice(&UBIFS_NODE_MAGIC.to_le_bytes());
+    buf[8..16].copy_from_slice(&sqnum.to_le_bytes());
+    buf[16..20].copy_from_slice(&(len as u32).to_le_bytes());
+    buf[20] = ubifs::UBIFS_DATA_NODE;
+    buf[24..28].copy_from_slice(&inum.to_le_bytes());
+    let k1 = (1u32 << 29) | (block_num & 0x1FFF_FFFF);
+    buf[28..32].copy_from_slice(&k1.to_le_bytes());
+    buf[40..44].copy_from_slice(&(uncomp_len as u32).to_le_bytes());
+    buf[44..46].copy_from_slice(&compr_type.to_le_bytes());
+    buf[48..48 + compressed_payload.len()].copy_from_slice(compressed_payload);
+    buf
+}
+
+#[cfg(test)]
 mod tests {
     use super::ubifs::{
         decompress_lzo1x, S_IFDIR, S_IFLNK, S_IFREG, UBIFS_COMPR_LZO, UBIFS_COMPR_NONE,
-        UBIFS_DATA_NODE, UBIFS_DENT_NODE, UBIFS_INO_NODE,
     };
-    use super::*;
+    use super::{
+        build_test_ubifs_compressed_data_node as build_ubifs_compressed_data_node,
+        build_test_ubifs_dent_node as build_ubifs_dent_node,
+        build_test_ubifs_ino_node as build_ubifs_ino_node, *,
+    };
     use crate::image_builder::RootfsNodeKind;
 
     fn build_ubi_peb(
@@ -403,68 +480,8 @@ mod tests {
         peb
     }
 
-    fn build_ubifs_ino_node(
-        sqnum: u64,
-        inum: u32,
-        mode: u16,
-        uid: u16,
-        gid: u16,
-        size: u64,
-        inline_data: &[u8],
-    ) -> Vec<u8> {
-        let len = 160 + inline_data.len();
-        let mut buf = vec![0u8; (len + 7) & !7];
-        buf[0..4].copy_from_slice(&UBIFS_NODE_MAGIC.to_le_bytes());
-        buf[8..16].copy_from_slice(&sqnum.to_le_bytes());
-        buf[16..20].copy_from_slice(&(len as u32).to_le_bytes());
-        buf[20] = UBIFS_INO_NODE;
-        buf[24..28].copy_from_slice(&inum.to_le_bytes());
-        buf[48..56].copy_from_slice(&size.to_le_bytes());
-        buf[92..96].copy_from_slice(&1u32.to_le_bytes()); // nlink = 1
-        buf[96..100].copy_from_slice(&(uid as u32).to_le_bytes());
-        buf[100..104].copy_from_slice(&(gid as u32).to_le_bytes());
-        buf[104..108].copy_from_slice(&(mode as u32).to_le_bytes());
-        buf[112..116].copy_from_slice(&(inline_data.len() as u32).to_le_bytes());
-        buf[160..160 + inline_data.len()].copy_from_slice(inline_data);
-        buf
-    }
-
-    fn build_ubifs_dent_node(
-        sqnum: u64,
-        parent_inum: u32,
-        target_inum: u32,
-        entry_type: u8,
-        name: &str,
-    ) -> Vec<u8> {
-        let nb = name.as_bytes();
-        let len = 56 + nb.len() + 1;
-        let mut buf = vec![0u8; (len + 7) & !7];
-        buf[0..4].copy_from_slice(&UBIFS_NODE_MAGIC.to_le_bytes());
-        buf[8..16].copy_from_slice(&sqnum.to_le_bytes());
-        buf[16..20].copy_from_slice(&(len as u32).to_le_bytes());
-        buf[20] = UBIFS_DENT_NODE;
-        buf[24..28].copy_from_slice(&parent_inum.to_le_bytes());
-        buf[40..48].copy_from_slice(&(target_inum as u64).to_le_bytes());
-        buf[49] = entry_type;
-        buf[50..52].copy_from_slice(&(nb.len() as u16).to_le_bytes());
-        buf[56..56 + nb.len()].copy_from_slice(nb);
-        buf
-    }
-
     fn build_ubifs_data_node(sqnum: u64, inum: u32, block_num: u32, data: &[u8]) -> Vec<u8> {
-        let len = 48 + data.len();
-        let mut buf = vec![0u8; (len + 7) & !7];
-        buf[0..4].copy_from_slice(&UBIFS_NODE_MAGIC.to_le_bytes());
-        buf[8..16].copy_from_slice(&sqnum.to_le_bytes());
-        buf[16..20].copy_from_slice(&(len as u32).to_le_bytes());
-        buf[20] = UBIFS_DATA_NODE;
-        buf[24..28].copy_from_slice(&inum.to_le_bytes());
-        let k1 = (1u32 << 29) | (block_num & 0x1FFF_FFFF);
-        buf[28..32].copy_from_slice(&k1.to_le_bytes());
-        buf[40..44].copy_from_slice(&(data.len() as u32).to_le_bytes());
-        buf[44..46].copy_from_slice(&UBIFS_COMPR_NONE.to_le_bytes());
-        buf[48..48 + data.len()].copy_from_slice(data);
-        buf
+        build_ubifs_compressed_data_node(sqnum, inum, block_num, data.len(), UBIFS_COMPR_NONE, data)
     }
 
     #[test]
@@ -602,29 +619,6 @@ mod tests {
         let tree = extract_ubi_into_tree(&ubi_sqsh).unwrap();
         assert_eq!(tree.get_file_bytes("hello.txt").unwrap(), file_content);
         assert_eq!(tree.get("hello.txt").unwrap().mode, 0o644);
-    }
-
-    fn build_ubifs_compressed_data_node(
-        sqnum: u64,
-        inum: u32,
-        block_num: u32,
-        uncomp_len: usize,
-        compr_type: u16,
-        compressed_payload: &[u8],
-    ) -> Vec<u8> {
-        let len = 48 + compressed_payload.len();
-        let mut buf = vec![0u8; (len + 7) & !7];
-        buf[0..4].copy_from_slice(&UBIFS_NODE_MAGIC.to_le_bytes());
-        buf[8..16].copy_from_slice(&sqnum.to_le_bytes());
-        buf[16..20].copy_from_slice(&(len as u32).to_le_bytes());
-        buf[20] = UBIFS_DATA_NODE;
-        buf[24..28].copy_from_slice(&inum.to_le_bytes());
-        let k1 = (1u32 << 29) | (block_num & 0x1FFF_FFFF);
-        buf[28..32].copy_from_slice(&k1.to_le_bytes());
-        buf[40..44].copy_from_slice(&(uncomp_len as u32).to_le_bytes());
-        buf[44..46].copy_from_slice(&compr_type.to_le_bytes());
-        buf[48..48 + compressed_payload.len()].copy_from_slice(compressed_payload);
-        buf
     }
 
     fn build_ubifs_pad_node(sqnum: u64, pad_len: u32) -> Vec<u8> {

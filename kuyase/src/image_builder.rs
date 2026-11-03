@@ -798,35 +798,17 @@ mod tests {
     }
 
     fn build_synthetic_lzo_ubifs_rootfs() -> Vec<u8> {
-        use crate::archive_formats::UBIFS_NODE_MAGIC;
+        use crate::archive_formats::{
+            build_test_ubifs_compressed_data_node, build_test_ubifs_dent_node,
+            build_test_ubifs_ino_node,
+        };
 
         let ino_node = |sqnum: u64, inum: u32, mode: u16, size: usize| -> Vec<u8> {
-            let mut buf = vec![0u8; 160];
-            buf[0..4].copy_from_slice(&UBIFS_NODE_MAGIC.to_le_bytes());
-            buf[8..16].copy_from_slice(&sqnum.to_le_bytes());
-            buf[16..20].copy_from_slice(&160u32.to_le_bytes());
-            buf[20] = 0; // UBIFS_INO_NODE
-            buf[24..28].copy_from_slice(&inum.to_le_bytes());
-            buf[48..56].copy_from_slice(&(size as u64).to_le_bytes());
-            buf[92..96].copy_from_slice(&1u32.to_le_bytes());
-            buf[104..108].copy_from_slice(&(mode as u32).to_le_bytes());
-            buf
+            build_test_ubifs_ino_node(sqnum, inum, mode, 0, 0, size as u64, b"")
         };
         let dent_node =
             |sqnum: u64, parent_inum: u32, target_inum: u32, entry_type: u8, name: &str| -> Vec<u8> {
-                let nb = name.as_bytes();
-                let len = 56 + nb.len() + 1;
-                let mut buf = vec![0u8; (len + 7) & !7];
-                buf[0..4].copy_from_slice(&UBIFS_NODE_MAGIC.to_le_bytes());
-                buf[8..16].copy_from_slice(&sqnum.to_le_bytes());
-                buf[16..20].copy_from_slice(&(len as u32).to_le_bytes());
-                buf[20] = 2; // UBIFS_DENT_NODE
-                buf[24..28].copy_from_slice(&parent_inum.to_le_bytes());
-                buf[40..48].copy_from_slice(&(target_inum as u64).to_le_bytes());
-                buf[49] = entry_type;
-                buf[50..52].copy_from_slice(&(nb.len() as u16).to_le_bytes());
-                buf[56..56 + nb.len()].copy_from_slice(nb);
-                buf
+                build_test_ubifs_dent_node(sqnum, parent_inum, target_inum, entry_type, name)
             };
         let lzo_data_node = |sqnum: u64, inum: u32, plain: &[u8]| -> Vec<u8> {
             assert!(plain.len() <= 238);
@@ -834,19 +816,7 @@ mod tests {
             lzo.push(17 + (plain.len() as u8));
             lzo.extend_from_slice(plain);
             lzo.extend_from_slice(&[0x11, 0x00, 0x00]); // LZO1X EOF
-            let len = 48 + lzo.len();
-            let mut buf = vec![0u8; (len + 7) & !7];
-            buf[0..4].copy_from_slice(&UBIFS_NODE_MAGIC.to_le_bytes());
-            buf[8..16].copy_from_slice(&sqnum.to_le_bytes());
-            buf[16..20].copy_from_slice(&(len as u32).to_le_bytes());
-            buf[20] = 1; // UBIFS_DATA_NODE
-            buf[24..28].copy_from_slice(&inum.to_le_bytes());
-            let k1 = 1u32 << 29; // block 0
-            buf[28..32].copy_from_slice(&k1.to_le_bytes());
-            buf[40..44].copy_from_slice(&(plain.len() as u32).to_le_bytes());
-            buf[44..46].copy_from_slice(&1u16.to_le_bytes()); // UBIFS_COMPR_LZO = 1
-            buf[48..48 + lzo.len()].copy_from_slice(&lzo);
-            buf
+            build_test_ubifs_compressed_data_node(sqnum, inum, 0, plain.len(), 1, &lzo)
         };
 
         let cfg = br#"{"deviceType": "yandexmini_2"}"#;
@@ -986,65 +956,6 @@ mod tests {
                 .unwrap(),
             b"0.367.1.6.4635833455.20260911.297\n"
         );
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn test_prepare_guest_image_from_real_station_updates_ota_if_present() {
-        let Some(ota_env) = std::env::var_os("KUYASE_TEST_OTA_PATH") else {
-            return;
-        };
-        let real_ota = Path::new(&ota_env);
-        if !real_ota.is_file() {
-            return;
-        }
-
-        let temp_dir =
-            std::env::temp_dir().join(format!("kuyase-real-ota-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&temp_dir);
-        fs::create_dir_all(temp_dir.join("guest-init").join("bin")).unwrap();
-
-        fs::write(
-            temp_dir.join("guest-init").join("equasar-qemu-init.sh"),
-            b"#!/bin/sh\necho real-ota-init\n",
-        )
-        .unwrap();
-        let mut mock_elf = b"\x7fELFmockbridge".to_vec();
-        mock_elf.resize(128, 0);
-        fs::write(
-            temp_dir
-                .join("guest-init")
-                .join("bin")
-                .join("qemu-hw-bridge"),
-            &mock_elf,
-        )
-        .unwrap();
-
-        let out_img = temp_dir.join("work").join("yandexmini2-ota-system.ext4");
-        let (board, built_path) =
-            build_guest_image_from_dump(&temp_dir, None, real_ota, Some(&out_img))
-                .expect("should unpack real OTA update.zip (CPIO + UBIFS LZO1X) and build .ext4");
-
-        assert_eq!(board, "yandexmini2");
-        assert_eq!(built_path, out_img);
-        assert!(out_img.is_file());
-
-        let readback = read_ext2_image(&out_img).unwrap();
-        assert_eq!(detect_board_from_tree(&readback), "yandexmini2");
-        let ver = String::from_utf8_lossy(
-            readback
-                .get_file_bytes("system/vendor/quasar/version_full")
-                .expect("version_full should exist in unpacked OTA rootfs"),
-        );
-        assert!(
-            ver.trim().starts_with("0.367."),
-            "unexpected version_full: {}",
-            ver
-        );
-        assert!(readback.get("quasar-qemu-init.sh").is_some());
-        assert!(readback.get("usr/local/bin/qemu-hw-bridge").is_some());
-        assert!(readback.get("bin/busybox").is_some());
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

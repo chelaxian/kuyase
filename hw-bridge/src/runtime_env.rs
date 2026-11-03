@@ -841,12 +841,12 @@ pub fn ensure_unified_var_run_under(root: &Path) {
 /// `sdbus::Error: [org.freedesktop.DBus.Error.Spawn.PermissionsInvalid] The permission of the setuid helper is not correct`.
 /// Note: on Linux, `chown` clears the `S_ISUID` (`04000`) bit on regular files, so `chown(0, 85)`
 /// must always be executed before `chmod(04750)`.
+#[cfg(unix)]
 pub fn ensure_dbus_launch_helper_permissions_under(root: &Path) {
     let helper = root.join("usr/libexec/dbus-daemon-launch-helper");
     if !helper.exists() {
         return;
     }
-    let _ = &helper;
 
     #[cfg(target_os = "linux")]
     if let Some(path_str) = helper.to_str() {
@@ -858,12 +858,15 @@ pub fn ensure_dbus_launch_helper_permissions_under(root: &Path) {
         }
     }
 
-    #[cfg(all(unix, not(target_os = "linux")))]
+    #[cfg(not(target_os = "linux"))]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(&helper, fs::Permissions::from_mode(0o4750));
     }
 }
+
+#[cfg(not(unix))]
+pub fn ensure_dbus_launch_helper_permissions_under(_root: &Path) {}
 
 /// Stage 3 of `Full Mode` D-Bus / BlueZ initialization:
 /// Prepares permissive D-Bus system bus configuration and redirects `org.bluez.service` activation

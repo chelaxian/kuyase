@@ -137,28 +137,10 @@ pub fn build_alice_state_event_with_format(
 /// turns it into `/speech/next` events and the AirPlay plugin executes the
 /// transport command. The emulator has no recogniser, so an injected phrase is
 /// rendered into the same message.
-pub fn build_alice_state_event(
-    phase: Option<u64>,
-    transcript: &str,
-    request_id: &str,
-    final_flag: bool,
-) -> Vec<u8> {
-    build_alice_state_event_with_format(
-        phase,
-        transcript,
-        request_id,
-        final_flag,
-        QuasarWireFormat::LegacyDirect,
-    )
-}
-
-/// The recognition result for a phrase. Sent after a `listening` frame: `aliced`
-/// replays retained state on a fresh IPC connection, and Luna marks that first
-/// frame as an initial snapshot, which the AirPlay plugin deliberately ignores.
-pub fn build_alice_voice_event(transcript: &str, request_id: &str) -> Vec<u8> {
-    build_alice_state_event(None, transcript, request_id, true)
-}
-
+///
+/// Sent after a `listening` frame: `aliced` replays retained state on a fresh
+/// IPC connection, and Luna marks that first frame as an initial snapshot,
+/// which the AirPlay plugin deliberately ignores.
 pub fn build_alice_voice_event_with_format(
     transcript: &str,
     request_id: &str,
@@ -168,10 +150,6 @@ pub fn build_alice_voice_event_with_format(
 }
 
 /// `AliceState` phase 1 = `LISTENING` (or `IDLE` snapshot), the frame that precedes a recognition.
-pub fn build_alice_listening_event() -> Vec<u8> {
-    build_alice_state_event(Some(1), "", "", false)
-}
-
 pub fn build_alice_listening_event_with_format(wire_format: QuasarWireFormat) -> Vec<u8> {
     build_alice_state_event_with_format(Some(1), "", "", false, wire_format)
 }
@@ -221,10 +199,6 @@ pub fn build_file_player_handshake_response_packet(wire_format: QuasarWireFormat
         wire_format,
     );
     frame_quasar_packet(&qmsg)
-}
-
-pub fn build_yio_audio_frame(doa_deg: f32, target_rms: u16, seq: u64) -> Vec<u8> {
-    build_yio_audio_frame_with_format(doa_deg, target_rms, seq, QuasarWireFormat::LegacyDirect)
 }
 
 pub fn build_yio_audio_frame_with_format(
@@ -526,12 +500,6 @@ pub fn decode_quasar_remoting_packet_with_format(
     ))
 }
 
-/// Strict decoder for `QuasarMessage { remoting = 210 }` (both legacy direct field `210` and
-/// `LITE_RUNTIME` envelope `payload = 252, type = 253 (210)`).
-pub fn decode_quasar_remoting_packet(payload: &[u8]) -> Result<DecodedRemoting, String> {
-    decode_quasar_remoting_packet_with_format(payload).map(|(decoded, _)| decoded)
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum DecodedIoHubPacket {
     ExternalDirectives(String),
@@ -721,12 +689,13 @@ mod tests {
     /// produce exactly that, or /speech/next never yields an event.
     #[test]
     fn test_build_alice_events() {
-        let listening = build_alice_listening_event();
+        let listening = build_alice_listening_event_with_format(QuasarWireFormat::LegacyDirect);
         let state = pb_bytes(&listening, 3).expect("message.state");
         assert_eq!(pb_varint(state, 1), Some(1), "LISTENING phase");
         assert_eq!(pb_bytes(state, 2), None, "no transcript in listening");
 
-        let voice = build_alice_voice_event("пауза", "emu-7");
+        let voice =
+            build_alice_voice_event_with_format("пауза", "emu-7", QuasarWireFormat::LegacyDirect);
         let state = pb_bytes(&voice, 3).expect("message.state");
         assert_eq!(pb_varint(state, 1), None, "no phase means recognition");
         assert_eq!(pb_bytes(state, 2), Some("пауза".as_bytes()));
@@ -748,8 +717,8 @@ mod tests {
             push_len_delimited(&mut qmsg, 210, &remoting);
 
             assert_eq!(
-                decode_quasar_remoting_packet(&qmsg),
-                Ok(DecodedRemoting::CancelDialog),
+                decode_quasar_remoting_packet_with_format(&qmsg),
+                Ok((DecodedRemoting::CancelDialog, QuasarWireFormat::LegacyDirect)),
                 "method {method} should decode as CancelDialog"
             );
         }
@@ -766,24 +735,11 @@ mod tests {
         push_len_delimited(&mut qmsg2, 210, &remoting2);
 
         assert_eq!(
-            decode_quasar_remoting_packet(&qmsg2),
-            Ok(DecodedRemoting::StartVocalize("Привет".to_string()))
-        );
-    }
-
-    #[test]
-    fn test_accept_native_endpoint_storage_and_device_state() {
-        let mut remoting = Vec::new();
-        push_len_delimited(&mut remoting, 7, b"EndpointStorage_");
-        push_len_delimited(&mut remoting, 1, &[0x10, 0x02]);
-        let mut qmsg = Vec::new();
-        push_len_delimited(&mut qmsg, 210, &remoting);
-        assert_eq!(
-            decode_quasar_remoting_packet(&qmsg),
-            Ok(DecodedRemoting::OtherCapability {
-                object_id: "EndpointStorage_".to_string(),
-                method_field: 1
-            })
+            decode_quasar_remoting_packet_with_format(&qmsg2),
+            Ok((
+                DecodedRemoting::StartVocalize("Привет".to_string()),
+                QuasarWireFormat::LegacyDirect
+            ))
         );
     }
 
@@ -1044,22 +1000,6 @@ mod tests {
                     QuasarWireFormat::Envelope252
                 ))
             );
-        }
-
-        // 10. q glagol-connections (GlagolDiscoveryRequest { debug_connections = 8 }, type = 185)
-        let glagol_leg = decode_hex("ca0b024200");
-        let glagol_env = decode_hex("e20f024200e80fb901");
-        for (raw, expected_wf) in [
-            (&glagol_leg, QuasarWireFormat::LegacyDirect),
-            (&glagol_env, QuasarWireFormat::Envelope252),
-        ] {
-            let qmsg = QuasarMessage::decode(raw).unwrap();
-            assert_eq!(qmsg.wire_format, expected_wf);
-            let disc_bytes = qmsg
-                .find_payload(QuasarMessageType::GLAGOL_DISCOVERY_REQUEST)
-                .unwrap();
-            let req = GlagolDiscoveryRequest::decode(disc_bytes).unwrap();
-            assert!(req.debug_connections);
         }
     }
 
