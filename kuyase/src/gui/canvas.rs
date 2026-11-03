@@ -1,8 +1,7 @@
 pub use crate::gui::display_geom::{
     board_has_matrix_21x12, board_has_segment_clock, build_local_segments_from_text,
-    clock_segment_lines, clock_segs_for_char, default_board_ring_leds, doa_angle_from_pointer,
-    hit_test_clock_segment, hit_test_matrix_pixel, led_ring_position, render_text_to_matrix_21x12,
-    segment_brightness,
+    clock_segment_lines, default_board_ring_leds, doa_angle_from_pointer, hit_test_clock_segment,
+    hit_test_matrix_pixel, led_ring_position, render_text_to_matrix_21x12, segment_brightness,
 };
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Margin, Pos2, Rect, RichText, Sense, Stroke, Vec2};

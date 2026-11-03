@@ -309,3 +309,64 @@ pub fn render_text_to_matrix_21x12(text: &str, brightness: u8) -> Vec<u8> {
 
     grid
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display_segments_matrix_and_led_frame_parsing() {
+        let names = canonical_clock_segment_names();
+        assert_eq!(names.len(), 45);
+
+        let spec = parse_clock_segment_spec("a1, b2=128, deg:64", 200).unwrap();
+        assert_eq!(spec.get("a1"), Some(&200));
+        assert_eq!(spec.get("b2"), Some(&128));
+        assert_eq!(spec.get("deg"), Some(&64));
+        assert_eq!(spec.get("c1"), Some(&0));
+
+        let map_time = build_segments_map_from_text("19:30°", 255);
+        assert_eq!(map_time.get("b1"), Some(&255));
+        assert_eq!(map_time.get("p3"), Some(&255));
+        assert_eq!(map_time.get("deg"), Some(&255));
+        assert_eq!(map_time.get("h1"), Some(&0));
+
+        let map_temp = build_segments_map_from_text("+24°", 200);
+        assert_eq!(map_temp.get("h1"), Some(&200));
+        assert_eq!(map_temp.get("m1"), Some(&200));
+        assert_eq!(map_temp.get("deg"), Some(&200));
+
+        let grid = render_text_to_matrix_21x12("19:30°", 255);
+        assert_eq!(grid.len(), 252);
+        assert!(grid.iter().filter(|&&px| px > 0).count() > 25);
+        assert_eq!(grid[4 * 21 + 10], 255);
+        assert_eq!(grid[6 * 21 + 10], 255);
+        assert_eq!(grid[20], 255);
+
+        let mut tokens45 = vec!["000000"; 45];
+        tokens45[0] = "ffffff";
+        tokens45[44] = "808080";
+        let raw_seg_led = format!("loop\n{} 40\n", tokens45.join(" "));
+        match parse_display_led_frame(&raw_seg_led, 255) {
+            Some(ParsedLedDisplayFrame::Segments45(map)) => {
+                assert_eq!(map.get("a1"), Some(&255));
+                assert_eq!(map.get("deg"), Some(&128));
+                assert_eq!(map.get("b1"), Some(&0));
+            }
+            _ => panic!("Expected Segments45 frame"),
+        }
+
+        let mut tokens252 = vec!["000000"; 252];
+        tokens252[0] = "ffffff";
+        tokens252[251] = "404040";
+        let raw_mat_led = format!("loop\n{} 35\n", tokens252.join(" "));
+        match parse_display_led_frame(&raw_mat_led, 255) {
+            Some(ParsedLedDisplayFrame::Matrix21x12(px)) => {
+                assert_eq!(px.len(), 252);
+                assert_eq!(px[0], 255);
+                assert_eq!(px[251], 64);
+            }
+            _ => panic!("Expected Matrix21x12 frame"),
+        }
+    }
+}

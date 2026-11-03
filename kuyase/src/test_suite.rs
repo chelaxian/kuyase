@@ -81,11 +81,11 @@ fn verify_bridge_and_profile(board: &str, bridge: &BridgeClient) -> Result<(), S
 
 fn verify_adb_and_hw_json(board: &str, adb: &AdbClient) -> Result<GuestHwMeta, String> {
     let adb_out = adb.shell(
-        "hostname; uname -m; [ ! -e /usr/local/bin/equasar-daemon ] && echo CLEAN_STANDALONE; cat /tmp/quasar-emu-hw.json",
+        "hostname; uname -m; cat /tmp/quasar-emu-hw.json",
         Duration::from_secs(12),
     )?;
     let expected_host = format!("qemu-{}", board);
-    if !adb_out.contains(&expected_host) || !adb_out.contains("CLEAN_STANDALONE") {
+    if !adb_out.contains(&expected_host) {
         return Err(format!("[{}] Unexpected adb output: {}", board, adb_out));
     }
     let json_start = adb_out

@@ -1,7 +1,7 @@
 use eframe::egui::{Pos2, Rect};
+pub use protocol::default_board_ring_leds;
 pub use protocol::display::{
-    build_segments_map_from_text as build_local_segments_from_text, clock_segs_for_char,
-    render_text_to_matrix_21x12,
+    build_segments_map_from_text as build_local_segments_from_text, render_text_to_matrix_21x12,
 };
 use protocol::BridgeStateSnapshot;
 use std::collections::BTreeMap;
@@ -27,10 +27,6 @@ pub fn doa_angle_from_pointer(center: Pos2, pointer: Pos2) -> u32 {
 
 pub fn segment_brightness(segments: &BTreeMap<String, u8>, key: &str) -> u8 {
     segments.get(key).copied().unwrap_or(0)
-}
-
-pub fn default_board_ring_leds(slug: &str) -> usize {
-    protocol::default_board_ring_leds(slug)
 }
 
 pub fn board_has_segment_clock(slug: &str, st: &BridgeStateSnapshot) -> bool {
@@ -158,18 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn test_segment_clock_text_decoding_and_hit_testing() {
-        let map_time = build_local_segments_from_text("19:30°", 255);
-        assert_eq!(segment_brightness(&map_time, "b1"), 255);
-        assert_eq!(segment_brightness(&map_time, "p3"), 255);
-        assert_eq!(segment_brightness(&map_time, "deg"), 255);
-        assert_eq!(segment_brightness(&map_time, "h1"), 0);
-
-        let map_temp = build_local_segments_from_text("+24°", 200);
-        assert_eq!(segment_brightness(&map_temp, "h1"), 200);
-        assert_eq!(segment_brightness(&map_temp, "m1"), 200);
-        assert_eq!(segment_brightness(&map_temp, "deg"), 200);
-
+    fn test_clock_and_matrix_hit_testing() {
         let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(260.0, 64.0));
         let lines = clock_segment_lines(rect);
         let a1_line = lines.iter().find(|(k, _, _)| k == "a1").unwrap();
@@ -195,9 +180,5 @@ mod tests {
             ),
             Some(251)
         );
-
-        let m_1930 = render_text_to_matrix_21x12("19:30°", 255);
-        assert_eq!(m_1930.len(), 252);
-        assert_eq!(m_1930[20], 255);
     }
 }

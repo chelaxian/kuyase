@@ -202,7 +202,7 @@ impl AdbClient {
     }
 
     pub fn shell(&self, command: &str, timeout: Duration) -> Result<String, String> {
-        if command.len() > 2000 {
+        if command.len() > 1800 {
             let step_timeout = Duration::from_secs(15);
             self.shell_raw("rm -f /tmp/.kuyase-exec.sh", step_timeout)?;
             let mut chunk = String::new();
@@ -224,10 +224,7 @@ impl AdbClient {
                     step_timeout,
                 )?;
             }
-            return self.shell_raw(
-                "sh /tmp/.kuyase-exec.sh; __kuyase_rc=$?; rm -f /tmp/.kuyase-exec.sh; printf \"\\n__KUYASE_EXIT_CODE=%d\\n\" \"$__kuyase_rc\"",
-                timeout,
-            );
+            return self.shell_raw("sh /tmp/.kuyase-exec.sh", timeout);
         }
         self.shell_raw(command, timeout)
     }

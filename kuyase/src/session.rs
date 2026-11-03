@@ -994,13 +994,6 @@ impl EmulatorSession {
         self.serial_screen.lock().unwrap().clear_scrollback();
     }
 
-    pub fn push_serial_line(&self, line: impl Into<String>) {
-        self.serial_screen
-            .lock()
-            .unwrap()
-            .push_completed_line(line.into());
-    }
-
     pub fn serial_lines(&self) -> Vec<String> {
         self.serial_screen.lock().unwrap().all_lines()
     }

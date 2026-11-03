@@ -10,7 +10,7 @@ pub mod terminal;
 
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, FontId, Margin, RichText, Stroke, TextStyle};
-pub use protocol::{board_display_label, BOARD_LABELS};
+pub use protocol::board_display_label;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::Ordering;

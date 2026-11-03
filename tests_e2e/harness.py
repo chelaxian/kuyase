@@ -317,13 +317,6 @@ def load_luna_install_sh() -> str:
     return http_get_text("https://raw.githubusercontent.com/nyakokitsu/luna/main/install.sh")
 
 
-def load_luna_install_ps1() -> str:
-    luna_dir = resolve_luna_repo_dir()
-    if luna_dir is not None and (luna_dir / "install.ps1").is_file():
-        return (luna_dir / "install.ps1").read_text(encoding="utf-8").replace("\r\n", "\n")
-    return http_get_text("https://raw.githubusercontent.com/nyakokitsu/luna/main/install.ps1")
-
-
 def latest_airplay_release_tag() -> str:
     raw = http_get_text("https://api.github.com/repos/ryysel/Station-airplay/releases/latest")
     data = json.loads(raw)

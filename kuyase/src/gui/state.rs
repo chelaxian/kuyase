@@ -8,8 +8,8 @@ pub use crate::gui::signal_log::{
     SignalFilter, SignalLogEntry, MAX_SIGNAL_LOGS,
 };
 use crate::session::{
-    discover_guest_images, resolve_bridge_binary, resolve_kernel_image, resolve_qemu_binary,
-    EmulatorSession, SessionConfig,
+    discover_guest_images, resolve_kernel_image, resolve_qemu_binary, EmulatorSession,
+    SessionConfig,
 };
 use protocol::{normalize_board_slug, BridgeStateSnapshot, HostCommand};
 use serde::{Deserialize, Serialize};
@@ -46,7 +46,6 @@ pub struct UiConfig {
     pub selected_dump_path: String,
     pub active_terminal_tab: String,
     pub dock_collapsed: bool,
-    pub dock_large: bool,
 }
 
 impl Default for UiConfig {
@@ -71,7 +70,6 @@ impl Default for UiConfig {
             selected_dump_path: String::new(),
             active_terminal_tab: "signals".to_string(),
             dock_collapsed: false,
-            dock_large: false,
         }
     }
 }
@@ -87,7 +85,6 @@ pub struct GuiAppState {
     pub firmware_dumps: Vec<(String, PathBuf)>,
     pub qemu_path: Option<PathBuf>,
     pub kernel_path: Option<PathBuf>,
-    pub bridge_bin_path: Option<PathBuf>,
     pub bg_task_running: Arc<AtomicBool>,
     pub bg_task_status: Arc<Mutex<String>>,
     pub was_bg_running: bool,
@@ -120,7 +117,6 @@ pub struct GuiAppState {
     pub temp_slider: f32,
     pub volume_slider: u32,
     pub voice_phrase: String,
-    pub voice_doa: u32,
     pub voice_rms: u32,
     pub voice_wake_only: bool,
     pub ipc_vocalize_text: String,
@@ -172,7 +168,6 @@ impl GuiAppState {
             firmware_dumps: Vec::new(),
             qemu_path: None,
             kernel_path: None,
-            bridge_bin_path: None,
             bg_task_running: Arc::new(AtomicBool::new(false)),
             bg_task_status: Arc::new(Mutex::new(String::from("Idle"))),
             was_bg_running: false,
@@ -211,7 +206,6 @@ impl GuiAppState {
             temp_slider: 40.0,
             volume_slider: 7,
             voice_phrase: "включи ночной режим".to_string(),
-            voice_doa: 90,
             voice_rms: 2200,
             voice_wake_only: false,
             ipc_vocalize_text: "Привет! Сегодня в Москве плюс 21 градус, без осадков.".to_string(),
@@ -450,8 +444,6 @@ impl GuiAppState {
         } else {
             resolve_kernel_image(&self.root_dir).ok()
         };
-
-        self.bridge_bin_path = resolve_bridge_binary(&self.root_dir).ok();
     }
 
     pub fn refresh_images_and_dumps(&mut self) {

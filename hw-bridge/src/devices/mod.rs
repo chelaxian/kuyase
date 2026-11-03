@@ -99,7 +99,7 @@ impl BoardPeripherals {
         } else if profile.has_clock {
             Box::new(SegmentClockSysfsDisplay::new(profile.sysfs_prefix.clone()))
         } else {
-            Box::new(NullFrontDisplay::new())
+            Box::new(NullFrontDisplay)
         };
 
         // 4. Аудиоподсистема (`AudioSubsystemDevice`: 4× ACM8625S + Ultrasound TDM-A)
@@ -127,23 +127,6 @@ impl BoardPeripherals {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol::display::{
-        canonical_clock_segment_names, parse_clock_segment_spec, parse_display_led_frame,
-        ParsedLedDisplayFrame,
-    };
-
-    #[test]
-    fn test_orion_matrix_21x12_rendering() {
-        let grid = OrionMatrix21x12Display::render_text_to_matrix("19:30°", 255);
-        assert_eq!(grid.len(), 252);
-        let lit_pixels = grid.iter().filter(|&&px| px > 0).count();
-        assert!(
-            lit_pixels > 25,
-            "Expected lit pixels for '19:30°' on 21x12 matrix"
-        );
-        assert_eq!(grid[4 * 21 + 10], 255);
-        assert_eq!(grid[6 * 21 + 10], 255);
-    }
 
     #[test]
     fn test_hardvold_gain_curve() {
@@ -151,43 +134,5 @@ mod tests {
         assert_eq!(OrionQuadAcm8625Audio::hardvold_gain_db(10), 0.0);
         let mid = OrionQuadAcm8625Audio::hardvold_gain_db(5);
         assert!(mid > -34.0 && mid < -32.0);
-    }
-
-    #[test]
-    fn test_clock_segment_spec_and_led_frame_parsing() {
-        let names = canonical_clock_segment_names();
-        assert_eq!(names.len(), 45);
-
-        let spec = parse_clock_segment_spec("a1, b2=128, deg:64", 200).unwrap();
-        assert_eq!(spec.get("a1"), Some(&200));
-        assert_eq!(spec.get("b2"), Some(&128));
-        assert_eq!(spec.get("deg"), Some(&64));
-        assert_eq!(spec.get("c1"), Some(&0));
-
-        let mut tokens45 = vec!["000000"; 45];
-        tokens45[0] = "ffffff";
-        tokens45[44] = "808080";
-        let raw_seg_led = format!("loop\n{} 40\n", tokens45.join(" "));
-        match parse_display_led_frame(&raw_seg_led, 255) {
-            Some(ParsedLedDisplayFrame::Segments45(map)) => {
-                assert_eq!(map.get("a1"), Some(&255));
-                assert_eq!(map.get("deg"), Some(&128));
-                assert_eq!(map.get("b1"), Some(&0));
-            }
-            _ => panic!("Expected Segments45 frame"),
-        }
-
-        let mut tokens252 = vec!["000000"; 252];
-        tokens252[0] = "ffffff";
-        tokens252[251] = "404040";
-        let raw_mat_led = format!("loop\n{} 35\n", tokens252.join(" "));
-        match parse_display_led_frame(&raw_mat_led, 255) {
-            Some(ParsedLedDisplayFrame::Matrix21x12(px)) => {
-                assert_eq!(px.len(), 252);
-                assert_eq!(px[0], 255);
-                assert_eq!(px[251], 64);
-            }
-            _ => panic!("Expected Matrix21x12 frame"),
-        }
     }
 }

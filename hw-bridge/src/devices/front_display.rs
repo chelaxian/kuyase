@@ -31,19 +31,7 @@ pub trait FrontDisplayDevice: Send + Sync {
     fn render_volume_overlay(&self, level: u32, active: bool);
 }
 
-pub struct NullFrontDisplay {
-    pub saved_segments: Mutex<BTreeMap<String, u8>>,
-    pub saved_pixels: Mutex<Vec<u8>>,
-}
-
-impl NullFrontDisplay {
-    pub fn new() -> Self {
-        Self {
-            saved_segments: Mutex::new(empty_clock_segments_map()),
-            saved_pixels: Mutex::new(vec![0u8; OrionMatrix21x12Display::PIXELS]),
-        }
-    }
-}
+pub struct NullFrontDisplay;
 
 impl FrontDisplayDevice for NullFrontDisplay {
     fn display_kind(&self) -> &'static str {
@@ -53,71 +41,19 @@ impl FrontDisplayDevice for NullFrontDisplay {
     fn read_display(&self) -> FrontDisplayReadout {
         FrontDisplayReadout {
             display_kind: "none",
-            clock_segments: self.saved_segments.lock().unwrap().clone(),
+            clock_segments: BTreeMap::new(),
             screen_width: OrionMatrix21x12Display::WIDTH,
             screen_height: OrionMatrix21x12Display::HEIGHT,
-            screen_pixels: self.saved_pixels.lock().unwrap().clone(),
+            screen_pixels: Vec::new(),
         }
     }
-    fn write_display_text(&self, text: &str, brightness: u8) {
-        if self.write_display_led_frame(text, brightness) {
-            return;
-        }
-        if let Some(seg_map) = parse_clock_segment_spec(text, brightness) {
-            self.write_display_segments(&seg_map, true);
-            return;
-        }
-        *self.saved_segments.lock().unwrap() = build_segments_map_from_text(text, brightness);
-        *self.saved_pixels.lock().unwrap() =
-            OrionMatrix21x12Display::render_text_to_matrix(text, brightness);
+    fn write_display_text(&self, _text: &str, _brightness: u8) {}
+    fn write_display_segments(&self, _segments: &BTreeMap<String, u8>, _replace_all: bool) {}
+    fn write_display_pixels(&self, _pixels: &[u8]) {}
+    fn write_display_led_frame(&self, _raw_led: &str, _brightness: u8) -> bool {
+        false
     }
-    fn write_display_segments(&self, segments: &BTreeMap<String, u8>, replace_all: bool) {
-        let mut cur = self.saved_segments.lock().unwrap();
-        if replace_all {
-            *cur = empty_clock_segments_map();
-        }
-        for (k, &v) in segments {
-            if is_valid_clock_segment(k) {
-                cur.insert(k.to_ascii_lowercase(), v);
-            }
-        }
-    }
-    fn write_display_pixels(&self, pixels: &[u8]) {
-        let mut cur = self.saved_pixels.lock().unwrap();
-        cur.fill(0);
-        for (i, &v) in pixels
-            .iter()
-            .enumerate()
-            .take(OrionMatrix21x12Display::PIXELS)
-        {
-            cur[i] = v;
-        }
-    }
-    fn write_display_led_frame(&self, raw_led: &str, brightness: u8) -> bool {
-        match parse_display_led_frame(raw_led, brightness) {
-            Some(ParsedLedDisplayFrame::Matrix21x12(px)) => {
-                self.write_display_pixels(&px);
-                true
-            }
-            Some(ParsedLedDisplayFrame::Segments45(segs)) => {
-                self.write_display_segments(&segs, true);
-                true
-            }
-            None => false,
-        }
-    }
-    fn scale_active_brightness(&self, brightness: u8) {
-        for v in self.saved_segments.lock().unwrap().values_mut() {
-            if *v > 0 {
-                *v = brightness;
-            }
-        }
-        for v in self.saved_pixels.lock().unwrap().iter_mut() {
-            if *v > 0 {
-                *v = brightness;
-            }
-        }
-    }
+    fn scale_active_brightness(&self, _brightness: u8) {}
     fn render_volume_overlay(&self, _level: u32, _active: bool) {}
 }
 
@@ -125,7 +61,6 @@ pub struct SegmentClockSysfsDisplay {
     pub sysfs_prefix: String,
     pub saved_segments: Mutex<BTreeMap<String, u8>>,
     pub active_mask: Mutex<BTreeMap<String, bool>>,
-    pub saved_pixels: Mutex<Vec<u8>>,
 }
 
 impl SegmentClockSysfsDisplay {
@@ -134,7 +69,6 @@ impl SegmentClockSysfsDisplay {
             sysfs_prefix,
             saved_segments: Mutex::new(empty_clock_segments_map()),
             active_mask: Mutex::new(BTreeMap::new()),
-            saved_pixels: Mutex::new(vec![0u8; OrionMatrix21x12Display::PIXELS]),
         }
     }
 }
@@ -168,7 +102,7 @@ impl FrontDisplayDevice for SegmentClockSysfsDisplay {
             clock_segments: clock_map,
             screen_width: OrionMatrix21x12Display::WIDTH,
             screen_height: OrionMatrix21x12Display::HEIGHT,
-            screen_pixels: self.saved_pixels.lock().unwrap().clone(),
+            screen_pixels: Vec::new(),
         }
     }
 
@@ -182,8 +116,6 @@ impl FrontDisplayDevice for SegmentClockSysfsDisplay {
         }
         let segs = build_segments_map_from_text(text, brightness);
         self.write_display_segments(&segs, true);
-        *self.saved_pixels.lock().unwrap() =
-            OrionMatrix21x12Display::render_text_to_matrix(text, brightness);
     }
 
     fn write_display_segments(&self, segments: &BTreeMap<String, u8>, replace_all: bool) {
@@ -228,29 +160,16 @@ impl FrontDisplayDevice for SegmentClockSysfsDisplay {
         }
     }
 
-    fn write_display_pixels(&self, pixels: &[u8]) {
-        let mut cur = self.saved_pixels.lock().unwrap();
-        cur.fill(0);
-        for (i, &v) in pixels
-            .iter()
-            .enumerate()
-            .take(OrionMatrix21x12Display::PIXELS)
-        {
-            cur[i] = v;
-        }
-    }
+    fn write_display_pixels(&self, _pixels: &[u8]) {}
 
     fn write_display_led_frame(&self, raw_led: &str, brightness: u8) -> bool {
-        match parse_display_led_frame(raw_led, brightness) {
-            Some(ParsedLedDisplayFrame::Segments45(segs)) => {
-                self.write_display_segments(&segs, true);
-                true
-            }
-            Some(ParsedLedDisplayFrame::Matrix21x12(px)) => {
-                self.write_display_pixels(&px);
-                true
-            }
-            None => false,
+        if let Some(ParsedLedDisplayFrame::Segments45(segs)) =
+            parse_display_led_frame(raw_led, brightness)
+        {
+            self.write_display_segments(&segs, true);
+            true
+        } else {
+            false
         }
     }
 
@@ -274,11 +193,6 @@ impl FrontDisplayDevice for SegmentClockSysfsDisplay {
             );
             let _ = fs::write(p, brightness.to_string());
         }
-        for v in self.saved_pixels.lock().unwrap().iter_mut() {
-            if *v > 0 {
-                *v = brightness;
-            }
-        }
     }
 
     fn render_volume_overlay(&self, _level: u32, _active: bool) {}
@@ -287,7 +201,6 @@ impl FrontDisplayDevice for SegmentClockSysfsDisplay {
 pub struct OrionMatrix21x12Display {
     pub saved_pixels: Mutex<Vec<u8>>,
     pub active_mask: Mutex<Vec<bool>>,
-    pub virtual_clock_segments: Mutex<BTreeMap<String, u8>>,
     pub volume_overlay_active: AtomicBool,
     pub last_volume_level: AtomicU32,
 }
@@ -303,7 +216,6 @@ impl OrionMatrix21x12Display {
         Self {
             saved_pixels: Mutex::new(initial_px),
             active_mask: Mutex::new(mask),
-            virtual_clock_segments: Mutex::new(build_segments_map_from_text("12:00", 255)),
             volume_overlay_active: AtomicBool::new(false),
             last_volume_level: AtomicU32::new(u32::MAX),
         }
@@ -402,7 +314,7 @@ impl FrontDisplayDevice for OrionMatrix21x12Display {
 
         FrontDisplayReadout {
             display_kind: "matrix_21x12",
-            clock_segments: self.virtual_clock_segments.lock().unwrap().clone(),
+            clock_segments: BTreeMap::new(),
             screen_width: Self::WIDTH,
             screen_height: Self::HEIGHT,
             screen_pixels: pixels,
@@ -413,11 +325,6 @@ impl FrontDisplayDevice for OrionMatrix21x12Display {
         if self.write_display_led_frame(text, brightness) {
             return;
         }
-        if let Some(seg_map) = parse_clock_segment_spec(text, brightness) {
-            self.write_display_segments(&seg_map, true);
-            return;
-        }
-        *self.virtual_clock_segments.lock().unwrap() = build_segments_map_from_text(text, brightness);
         let mask_grid = Self::render_text_to_matrix(text, 255);
         *self.active_mask.lock().unwrap() = mask_grid.iter().map(|&v| v > 0).collect();
         let grid = Self::render_text_to_matrix(text, brightness);
@@ -425,17 +332,7 @@ impl FrontDisplayDevice for OrionMatrix21x12Display {
         self.write_matrix_to_fb(&grid);
     }
 
-    fn write_display_segments(&self, segments: &BTreeMap<String, u8>, replace_all: bool) {
-        let mut cur = self.virtual_clock_segments.lock().unwrap();
-        if replace_all {
-            *cur = empty_clock_segments_map();
-        }
-        for (k, &v) in segments {
-            if is_valid_clock_segment(k) {
-                cur.insert(k.to_ascii_lowercase(), v);
-            }
-        }
-    }
+    fn write_display_segments(&self, _segments: &BTreeMap<String, u8>, _replace_all: bool) {}
 
     fn write_display_pixels(&self, pixels: &[u8]) {
         let mut grid = vec![0u8; Self::PIXELS];
@@ -450,16 +347,13 @@ impl FrontDisplayDevice for OrionMatrix21x12Display {
     }
 
     fn write_display_led_frame(&self, raw_led: &str, brightness: u8) -> bool {
-        match parse_display_led_frame(raw_led, brightness) {
-            Some(ParsedLedDisplayFrame::Matrix21x12(px)) => {
-                self.write_display_pixels(&px);
-                true
-            }
-            Some(ParsedLedDisplayFrame::Segments45(segs)) => {
-                self.write_display_segments(&segs, true);
-                true
-            }
-            None => false,
+        if let Some(ParsedLedDisplayFrame::Matrix21x12(px)) =
+            parse_display_led_frame(raw_led, brightness)
+        {
+            self.write_display_pixels(&px);
+            true
+        } else {
+            false
         }
     }
 
@@ -480,11 +374,6 @@ impl FrontDisplayDevice for OrionMatrix21x12Display {
         }
         *self.saved_pixels.lock().unwrap() = px.clone();
         self.write_matrix_to_fb(&px);
-        for v in self.virtual_clock_segments.lock().unwrap().values_mut() {
-            if *v > 0 {
-                *v = brightness;
-            }
-        }
     }
 
     fn render_volume_overlay(&self, level: u32, active: bool) {

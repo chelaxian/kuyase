@@ -4,7 +4,7 @@ pub mod display;
 pub use boards::{
     board_display_label, board_has_matrix_21x12, board_has_segment_clock, default_board_ring_leds,
     detect_board_hint_from_filename, detect_board_hint_from_path, detect_board_slug_from_probe,
-    find_board_descriptor, normalize_board_slug, BoardDescriptor, BOARD_CATALOG, BOARD_LABELS,
+    find_board_descriptor, normalize_board_slug, BoardDescriptor, BOARD_CATALOG,
 };
 
 use serde::{Deserialize, Serialize};
@@ -479,5 +479,56 @@ mod tests {
             Some("yandexmini2")
         );
         assert_eq!(detect_board_hint_from_filename("rootfs.tar.gz"), None);
+
+        assert_eq!(detect_board_slug_from_probe("mini2", ""), "yandexmini2");
+        assert_eq!(
+            detect_board_slug_from_probe("plum", "yandex,prune-evt2 yandex,prune"),
+            "plumnc"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("plum", "yandex,plum-evt2 yandex,plum"),
+            "plum"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("yandexmidi", "yandex,station-midi amlogic, axg"),
+            "station2"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("yandexmidi", "yandex,cucumber-dvt2 amlogic, a5"),
+            "cucumber"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("cucumber", "yandex,cucumber-dvt2 yandex,cucumber amlogic, a5"),
+            "cucumber"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("station3", "yandex,orion"),
+            "orion"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("", "yandex,cucumber-dvt2 amlogic,a5"),
+            "cucumber"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("", "amlogic, axg Amlogic"),
+            "yandexmini"
+        );
+        assert_eq!(detect_board_slug_from_probe("lite1", ""), "yandexmicro");
+        assert_eq!(
+            detect_board_slug_from_probe("bergamot", "yandex,bergamot amlogic,axg"),
+            "bergamot"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("", "yandex,bergamot amlogic,axg"),
+            "bergamot"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("mango", "yandex,mango amlogic,a1"),
+            "mango"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("", "yandex,mango amlogic,a1 Yandex Station Mango DVT"),
+            "mango"
+        );
     }
 }

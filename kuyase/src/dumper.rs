@@ -28,10 +28,6 @@ pub struct DumpResult {
     pub info: DumpInfo,
 }
 
-pub fn detect_board_slug_from_probe(dev_type_cfg: &str, model_raw: &str) -> String {
-    protocol::detect_board_slug_from_probe(dev_type_cfg, model_raw)
-}
-
 pub fn format_utc_timestamp(time: SystemTime) -> String {
     let secs = time
         .duration_since(UNIX_EPOCH)
@@ -136,7 +132,7 @@ pub fn dump_from_adb(
         }
     }
 
-    let board_slug = detect_board_slug_from_probe(&dev_type_cfg, &dt_model);
+    let board_slug = protocol::detect_board_slug_from_probe(&dev_type_cfg, &dt_model);
     let timestamp = format_utc_timestamp(SystemTime::now());
     let out_dir = match out_dir_override {
         Some(dir) => dir.to_path_buf(),
@@ -229,66 +225,9 @@ mod tests {
         read_adb_packet, write_adb_packet, A_CLSE, A_CNXN, A_OKAY, A_OPEN, A_VERSION, A_WRTE,
         MAX_ADB_DATA,
     };
-    use crate::image_builder::{read_tar_gz_into_tree, RootfsTree};
+    use crate::rootfs_tree::{read_tar_gz_into_tree, write_tree_to_tar_gz, RootfsTree};
     use std::net::TcpListener;
     use std::thread;
-
-    #[test]
-    fn test_detect_board_slug_from_probe() {
-        assert_eq!(detect_board_slug_from_probe("mini2", ""), "yandexmini2");
-        assert_eq!(
-            detect_board_slug_from_probe("plum", "yandex,prune-evt2 yandex,prune"),
-            "plumnc"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("plum", "yandex,plum-evt2 yandex,plum"),
-            "plum"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("yandexmidi", "yandex,station-midi amlogic, axg"),
-            "station2"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("yandexmidi", "yandex,cucumber-dvt2 amlogic, a5"),
-            "cucumber"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("cucumber", "yandex,cucumber-dvt2 yandex,cucumber amlogic, a5"),
-            "cucumber"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("station3", "yandex,orion"),
-            "orion"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("", "yandex,cucumber-dvt2 amlogic,a5"),
-            "cucumber"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("", "amlogic, axg Amlogic"),
-            "yandexmini"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("lite1", ""),
-            "yandexmicro"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("bergamot", "yandex,bergamot amlogic,axg"),
-            "bergamot"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("", "yandex,bergamot amlogic,axg"),
-            "bergamot"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("mango", "yandex,mango amlogic,a1"),
-            "mango"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("", "yandex,mango amlogic,a1 Yandex Station Mango DVT"),
-            "mango"
-        );
-    }
 
     #[test]
     fn test_dump_from_adb_against_mock_speaker() {
@@ -315,7 +254,7 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
         let mock_tar_path = temp_dir.join("device_scratch.tar.gz");
-        crate::image_builder::write_tree_to_tar_gz(&raw_tree, &mock_tar_path).unwrap();
+        write_tree_to_tar_gz(&raw_tree, &mock_tar_path).unwrap();
         let mock_tar_bytes = fs::read(&mock_tar_path).unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

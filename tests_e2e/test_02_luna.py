@@ -22,7 +22,6 @@ from tests_e2e.harness import (
     CANONICAL_STATION_HOSTNAME,
     discover_test_boards,
     http_get_text,
-    load_luna_install_ps1,
     load_luna_install_sh,
     run_headless_exec,
 )
@@ -43,13 +42,10 @@ def _luna_compact(val: str) -> str:
     return re.sub(r"[^a-z0-9]", "", x)
 
 
-def evaluate_luna_ps1_manifest_match(
-    install_ps1: str, manifest: Dict[str, Any], hostname: str
+def resolve_luna_manifest_device(
+    manifest: Dict[str, Any], hostname: str
 ) -> Optional[Tuple[str, str, str]]:
-    """Verify `install.ps1` structure and evaluate its `Compact` + `Get-Aliases` station matching."""
-    if "function Compact" not in install_ps1 or "function Get-Aliases" not in install_ps1:
-        raise RuntimeError("Compact / Get-Aliases functions missing from luna install.ps1")
-
+    """Resolve `(device, asset, codename)` from `manifest.json` for a canonical station hostname."""
     t_norm = _luna_compact(hostname)
     devices: List[Dict[str, Any]] = manifest.get("devices", [])
 
@@ -152,14 +148,11 @@ class TestLunaInstallerAndRuntimeE2E(unittest.TestCase):
             self.skipTest("No `work/*-system.ext4` guest images found")
 
         install_sh = load_luna_install_sh()
-        install_ps1 = load_luna_install_ps1()
         manifest = load_luna_release_manifest()
 
         for idx, board in enumerate(boards):
             canonical_host = CANONICAL_STATION_HOSTNAME.get(board, board)
-            matched = evaluate_luna_ps1_manifest_match(
-                install_ps1, manifest, canonical_host
-            )
+            matched = resolve_luna_manifest_device(manifest, canonical_host)
             with self.subTest(board=board):
                 if matched is None:
                     self.skipTest(
