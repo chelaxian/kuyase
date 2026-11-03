@@ -1,6 +1,7 @@
 pub mod canvas;
 pub mod display_geom;
 pub mod docks;
+pub mod faceplates;
 pub mod host_audio;
 pub mod launcher;
 pub mod os_dialogs;

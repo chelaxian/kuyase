@@ -943,8 +943,10 @@ mod tests {
         assert_eq!(app.signal_logs.len(), 2);
         assert_eq!(app.signal_logs[1].category, SignalCategory::TtsIpc);
 
-        let mut s1 = BridgeStateSnapshot::default();
-        s1.alice_state = "IDLE".to_string();
+        let s1 = BridgeStateSnapshot {
+            alice_state: "IDLE".to_string(),
+            ..Default::default()
+        };
         let mut s2 = s1.clone();
         s2.alice_state = "SPEAKING".to_string();
         s2.last_spoken_text = "Проверка TTS".to_string();
