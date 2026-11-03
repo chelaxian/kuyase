@@ -70,7 +70,7 @@ pub fn detect_board_slug_from_probe(dev_type_cfg: &str, model_raw: &str) -> Stri
         "orion".to_string()
     } else if model_lc.contains("plum") {
         "plum".to_string()
-    } else if model_lc.contains("mango") {
+    } else if model_lc.contains("mango") || model_lc.contains("street") {
         "mango".to_string()
     } else if model_lc.contains("saturn") {
         "saturn".to_string()
@@ -336,6 +336,14 @@ mod tests {
         assert_eq!(
             detect_board_slug_from_probe("", "yandex,bergamot amlogic,axg"),
             "bergamot"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("mango", "yandex,mango amlogic,a1"),
+            "mango"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("", "yandex,mango amlogic,a1 Yandex Station Mango DVT"),
+            "mango"
         );
     }
 
