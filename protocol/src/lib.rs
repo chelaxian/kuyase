@@ -183,6 +183,7 @@ pub struct CommandAckPayload {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum GuestPacket {
     StateSnapshot(BridgeStateSnapshot),
     PcmAudioChunk(Vec<u8>),
@@ -378,15 +379,17 @@ mod tests {
 
     #[test]
     fn test_guest_packet_roundtrip_all_variants() {
-        let mut state = BridgeStateSnapshot::default();
-        state.board_slug = "orion".to_string();
-        state.board_name = "Яндекс Станция 3 (YNDX-00055 / orion)".to_string();
-        state.ring_leds = 36;
-        state.ambilight_leds = 12;
-        state.aux_light_kind = "ambilight".to_string();
-        state.display_kind = "matrix_21x12".to_string();
-        state.ring_pixels = vec![[107, 15, 255]; 36];
-        state.logo_pixels = vec![[200, 110, 255]; 12];
+        let mut state = BridgeStateSnapshot {
+            board_slug: "orion".to_string(),
+            board_name: "Яндекс Станция 3 (YNDX-00055 / orion)".to_string(),
+            ring_leds: 36,
+            ambilight_leds: 12,
+            aux_light_kind: "ambilight".to_string(),
+            display_kind: "matrix_21x12".to_string(),
+            ring_pixels: vec![[107, 15, 255]; 36],
+            logo_pixels: vec![[200, 110, 255]; 12],
+            ..Default::default()
+        };
         state.amplifiers.push(AmplifierSlotState {
             i2c_device: "3-002d".to_string(),
             role: "woofer".to_string(),

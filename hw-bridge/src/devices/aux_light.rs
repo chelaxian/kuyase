@@ -83,10 +83,10 @@ impl AuxLightDevice for LogoSysfsFbDevice {
         }
         if let Ok(raw) = fs::read("/dev/fb1") {
             if raw.len() == self.count * 4 && raw.iter().any(|&b| b > 0) {
-                for i in 0..self.count {
+                for (i, slot) in out.iter_mut().enumerate().take(self.count) {
                     let base = i * 4;
                     let w = raw[base + 3] / 2;
-                    out[i] = [
+                    *slot = [
                         raw[base].saturating_add(w),
                         raw[base + 1].saturating_add(w),
                         raw[base + 2].saturating_add(w),
@@ -94,9 +94,9 @@ impl AuxLightDevice for LogoSysfsFbDevice {
                 }
                 return out;
             } else if raw.len() >= self.count * 3 && raw[..self.count * 3].iter().any(|&b| b > 0) {
-                for i in 0..self.count {
+                for (i, slot) in out.iter_mut().enumerate().take(self.count) {
                     let base = i * 3;
-                    out[i] = [raw[base], raw[base + 1], raw[base + 2]];
+                    *slot = [raw[base], raw[base + 1], raw[base + 2]];
                 }
                 return out;
             }
@@ -107,9 +107,7 @@ impl AuxLightDevice for LogoSysfsFbDevice {
                 .take(self.count)
                 .any(|p| p[0] > 0 || p[1] > 0 || p[2] > 0);
             if any_native {
-                for i in 0..self.count {
-                    out[i] = native_frame[i];
-                }
+                out[..self.count].copy_from_slice(&native_frame[..self.count]);
             }
         }
         out
@@ -209,12 +207,12 @@ impl AuxLightDevice for OrionAmbilightDevice {
         let fb_path = self.ambilight_fb_path();
         if let Ok(raw) = fs::read(&fb_path) {
             if raw.len() >= self.zones * 6 && raw.iter().any(|&b| b > 0) {
-                for i in 0..self.zones {
+                for (i, slot) in zones_px.iter_mut().enumerate().take(self.zones) {
                     let base = i * 6;
                     let r = raw[base].max(raw[base + 3]);
                     let g = raw[base + 1].max(raw[base + 4]);
                     let b = raw[base + 2].max(raw[base + 5]);
-                    zones_px[i] = [r, g, b];
+                    *slot = [r, g, b];
                 }
             }
         }

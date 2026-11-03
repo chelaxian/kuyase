@@ -367,7 +367,7 @@ pub fn spawn_volume_file_watcher(state: std::sync::Arc<BridgeState>) {
                 // percent/5 (0..20); fallback branches cover raw percent
                 // (21..100) and legacy master_volume (level * 1000).
                 let level = match raw {
-                    0..=20 => (raw + 1) / 2,
+                    0..=20 => raw.div_ceil(2),
                     21..=100 => (raw + 5) / 10,
                     _ => (raw / 1000).min(10),
                 };

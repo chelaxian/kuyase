@@ -367,9 +367,9 @@ impl FrontDisplayDevice for OrionMatrix21x12Display {
         }
         let mask = self.active_mask.lock().unwrap().clone();
         let mut px = vec![0u8; Self::PIXELS];
-        for i in 0..Self::PIXELS {
+        for (i, slot) in px.iter_mut().enumerate().take(Self::PIXELS) {
             if *mask.get(i).unwrap_or(&false) {
-                px[i] = brightness;
+                *slot = brightness;
             }
         }
         *self.saved_pixels.lock().unwrap() = px.clone();

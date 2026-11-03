@@ -77,8 +77,7 @@ pub fn parse_clock_segment_spec(spec: &str, default_brightness: u8) -> Option<BT
             v_str.parse::<u16>().ok()?.min(255) as u8
         } else {
             default_brightness
-        }
-        .min(255);
+        };
         map.insert(seg_raw.to_ascii_lowercase(), br);
     }
     Some(map)

@@ -252,6 +252,21 @@ fn reset_tty_ama0_termios() {
         .status();
 }
 
+#[cfg(target_os = "linux")]
+unsafe fn reset_child_signal_dispositions() {
+    const SIG_SETMASK: i32 = 2;
+    const SIG_DFL: usize = 0;
+    let empty_mask = [0u64; 16];
+    sigprocmask(SIG_SETMASK, empty_mask.as_ptr(), std::ptr::null_mut());
+    // Backgrounded processes in non-interactive init scripts inherit
+    // SIGINT/SIGQUIT = SIG_IGN (and Rust std sets SIGPIPE = SIG_IGN),
+    // which causes BusyBox ash to mark SIGINT/SIGQUIT as S_HARD_IGN.
+    // Reset all standard job-control and termination signals to SIG_DFL.
+    for sig in [1, 2, 3, 13, 15, 17, 18, 20, 21, 22] {
+        signal(sig, SIG_DFL);
+    }
+}
+
 pub fn spawn_serial_console_watcher() {
     thread::spawn(|| {
         thread::sleep(Duration::from_millis(600));
@@ -296,23 +311,13 @@ pub fn spawn_serial_console_watcher() {
                     const TIOCSCTTY: u32 = 0x540E;
                     const TIOCSPGRP: u32 = 0x5410;
                     const TIOCSWINSZ: u32 = 0x5414;
-                    const SIG_SETMASK: i32 = 2;
-                    const SIG_DFL: usize = 0;
                     cmd.pre_exec(|| {
                         let sid = setsid();
                         ioctl(0, TIOCSCTTY, 1);
                         if sid > 0 {
                             ioctl(0, TIOCSPGRP, &sid as *const i32);
                         }
-                        let empty_mask = [0u64; 16];
-                        sigprocmask(SIG_SETMASK, empty_mask.as_ptr(), std::ptr::null_mut());
-                        // Backgrounded processes in non-interactive init scripts inherit
-                        // SIGINT/SIGQUIT = SIG_IGN (and Rust std sets SIGPIPE = SIG_IGN),
-                        // which causes BusyBox ash to mark SIGINT/SIGQUIT as S_HARD_IGN.
-                        // Reset all standard job-control and termination signals to SIG_DFL.
-                        for sig in [1, 2, 3, 13, 15, 17, 18, 20, 21, 22] {
-                            signal(sig, SIG_DFL);
-                        }
+                        reset_child_signal_dispositions();
                         let ws = Winsize {
                             ws_row: 40,
                             ws_col: 120,
@@ -397,15 +402,9 @@ pub fn ensure_adbd_signals_unignored() {
             cmd.stdin(Stdio::null()).stdout(log_out).stderr(log_err);
             unsafe {
                 use std::os::unix::process::CommandExt;
-                const SIG_SETMASK: i32 = 2;
-                const SIG_DFL: usize = 0;
                 cmd.pre_exec(|| {
                     setsid();
-                    let empty_mask = [0u64; 16];
-                    sigprocmask(SIG_SETMASK, empty_mask.as_ptr(), std::ptr::null_mut());
-                    for sig in [1, 2, 3, 13, 15, 17, 18, 20, 21, 22] {
-                        signal(sig, SIG_DFL);
-                    }
+                    reset_child_signal_dispositions();
                     Ok(())
                 });
             }

@@ -79,11 +79,11 @@ pub fn build_yio_audio_frame(doa_deg: f32, target_rms: u16, seq: u64) -> Vec<u8>
     let n_samples = 256usize;
     let mut base_samples = vec![0i16; n_samples + 16];
     let amp = ((target_rms as f32) * 1.414).min(28_000.0);
-    for i in 0..base_samples.len() {
+    for (i, slot) in base_samples.iter_mut().enumerate() {
         let t = (seq * 256 + i as u64) as f32;
         // Broadband multi-tone signal with rich high-frequency slope for TDOA cross-correlation
         let v = (t * 0.42).sin() * 0.55 + (t * 1.13).cos() * 0.30 + (t * 2.31).sin() * 0.15;
-        base_samples[i] = (v * amp) as i16;
+        *slot = (v * amp) as i16;
     }
 
     let rad = doa_deg.to_radians();
@@ -486,7 +486,7 @@ mod tests {
         None
     }
 
-    fn pb_bytes<'a>(buf: &'a [u8], wanted: u32) -> Option<&'a [u8]> {
+    fn pb_bytes(buf: &[u8], wanted: u32) -> Option<&[u8]> {
         match pb_field(buf, wanted) {
             Some(PbField::Bytes(value)) => Some(value),
             _ => None,
