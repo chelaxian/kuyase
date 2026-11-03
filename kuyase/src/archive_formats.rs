@@ -6,13 +6,165 @@ pub use ubifs::{extract_ubifs_into_tree, UBIFS_NODE_MAGIC};
 
 use crate::ext_fs::{read_ext2_image, EXT2_SUPER_MAGIC};
 use crate::image_builder::{read_tar_from_reader, RootfsTree};
-use flate2::read::{DeflateDecoder, ZlibDecoder};
+use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Cursor, Read};
 
 pub const UBI_EC_MAGIC: &[u8; 4] = b"UBI#";
 pub const UBI_VID_MAGIC: &[u8; 4] = b"UBI!";
+
+/// SVR4 ASCII CPIO header magic without CRC (`070701`) and with CRC (`070702`),
+/// used by `swupdate` OTA containers (`update.zip` / `.swu`).
+pub const CPIO_NEWC_MAGIC: &[u8; 6] = b"070701";
+pub const CPIO_CRC_MAGIC: &[u8; 6] = b"070702";
+
+pub fn is_cpio_newc_archive(raw: &[u8]) -> bool {
+    raw.len() >= 110 && (&raw[0..6] == CPIO_NEWC_MAGIC || &raw[0..6] == CPIO_CRC_MAGIC)
+}
+
+fn parse_cpio_hex8(field: &[u8]) -> Result<u32, String> {
+    let s = std::str::from_utf8(field).map_err(|_| "invalid ASCII in CPIO hex header".to_string())?;
+    u32::from_str_radix(s, 16).map_err(|_| format!("invalid hex value in CPIO header: '{}'", s))
+}
+
+/// Extracts a `RootfsTree` from an SVR4 ASCII `CPIO newc` (`070701` / `070702`) archive.
+///
+/// ### `swupdate` OTA Container Layout & Encryption Model
+/// Official Yandex smart speaker OTA update archives (distributed as `update.zip` or `.swu`
+/// for `swupdate`) use an outer SVR4 ASCII `CPIO` container (`070701` or `070702`) where
+/// each member has a 110-byte ASCII hexadecimal header (`magic[0..6]`, `mode[14..22]`,
+/// `uid[22..30]`, `gid[30..38]`, `filesize[54..62]`, `namesize[94..102]`), followed by a
+/// NUL-terminated filename padded to a 4-byte boundary (`(off + 110 + namesize + 3) & !3`)
+/// and 4-byte aligned file data (`(data_off + filesize + 3) & !3`), ending at `TRAILER!!!`.
+///
+/// Inside a typical OTA package (e.g. `yandexmini2`), the CPIO members are:
+/// - `sw-description` and `sw-description.sig` (`swupdate` manifest and RSA signature)
+/// - `boot.img.encrypt` and `dt.img.encrypt` (Amlogic hardware-encrypted kernel & DTB)
+/// - `flash-nand-copies.sh` (flasher helper script)
+/// - `rootfs.ubifs` (**unencrypted** UBIFS root filesystem image compressed with `LZO1X-1`)
+/// - `u-boot.bin.encrypt.usb.bl2` and `u-boot.bin.encrypt.usb.tpl` (encrypted bootloader stages)
+///
+/// **Why `rootfs.ubifs` is unencrypted while `boot.img.encrypt` and `dt.img.encrypt` are encrypted**:
+/// On Amlogic SoCs (AXG / A1 / A5), the mask ROM (`BL1`) and Secure Monitor enforce hardware
+/// Secure Boot encryption on early boot stages (`BL2`, `TPL`, kernel `boot.img`, and device tree
+/// `dt.img`) loaded into secure memory before Linux starts. The root filesystem (`rootfs.ubifs`),
+/// however, is mounted by the Linux kernel in normal world (`REE`) directly from the raw NAND UBI
+/// volume (`ubi0:rootfs`), which does not use block-layer encryption (`dm-crypt`) because UBIFS
+/// manages raw flash LEBs directly. Because `kuyase` boots the guest rootfs under its own QEMU
+/// kernel, only the unencrypted `rootfs.ubifs` member is needed to construct a bootable `Guest Image`.
+pub fn extract_cpio_into_tree(raw: &[u8]) -> Result<RootfsTree, String> {
+    if !is_cpio_newc_archive(raw) {
+        return Err("not a valid CPIO newc (070701/070702) archive".to_string());
+    }
+
+    let mut direct_tree = RootfsTree::default();
+    let mut off = 0usize;
+
+    while off + 110 <= raw.len() {
+        let magic = &raw[off..off + 6];
+        if magic != CPIO_NEWC_MAGIC && magic != CPIO_CRC_MAGIC {
+            break;
+        }
+
+        let mode = parse_cpio_hex8(&raw[off + 14..off + 22])?;
+        let uid = (parse_cpio_hex8(&raw[off + 22..off + 30])? & 0xFFFF) as u16;
+        let gid = (parse_cpio_hex8(&raw[off + 30..off + 38])? & 0xFFFF) as u16;
+        let filesize = parse_cpio_hex8(&raw[off + 54..off + 62])? as usize;
+        let namesize = parse_cpio_hex8(&raw[off + 94..off + 102])? as usize;
+
+        let name_start = off + 110;
+        let name_end = name_start
+            .checked_add(namesize)
+            .ok_or("CPIO namesize overflow")?;
+        if name_end > raw.len() {
+            return Err("CPIO entry name exceeds archive bounds".to_string());
+        }
+
+        let raw_name = String::from_utf8_lossy(&raw[name_start..name_end])
+            .trim_end_matches('\0')
+            .to_string();
+
+        let data_off = (name_end + 3) & !3;
+        let data_end = data_off
+            .checked_add(filesize)
+            .ok_or("CPIO filesize overflow")?;
+        if data_end > raw.len() {
+            return Err(format!(
+                "CPIO entry '{}' payload ({} bytes) exceeds archive bounds",
+                raw_name, filesize
+            ));
+        }
+
+        let entry_data = &raw[data_off..data_end];
+        off = (data_end + 3) & !3;
+
+        if raw_name == "TRAILER!!!" {
+            break;
+        }
+
+        let lower_name = raw_name.to_ascii_lowercase();
+        let base_name = lower_name.rsplit('/').next().unwrap_or(&lower_name);
+        let is_named_rootfs_image = base_name == "rootfs.ubifs"
+            || base_name.ends_with(".ubifs")
+            || base_name == "rootfs.img"
+            || base_name == "system.img"
+            || base_name == "system.ext4"
+            || base_name == "ubi0_0_rootfs.img"
+            || base_name == "mtd3_system.bin"
+            || base_name.ends_with(".squashfs")
+            || base_name == "rootfs.tar.gz"
+            || base_name == "rootfs.tgz";
+
+        let has_fs_magic = entry_data.len() >= 24
+            && ({
+                let m = u32::from_le_bytes([
+                    entry_data[0],
+                    entry_data[1],
+                    entry_data[2],
+                    entry_data[3],
+                ]);
+                m == UBIFS_NODE_MAGIC
+                    || m == SQUASHFS_MAGIC
+                    || &entry_data[0..4] == UBI_EC_MAGIC
+                    || (entry_data.len() >= 2048
+                        && u16::from_le_bytes([entry_data[1080], entry_data[1081]])
+                            == EXT2_SUPER_MAGIC)
+            });
+
+        if is_named_rootfs_image || has_fs_magic {
+            if let Ok(inner_tree) = extract_payload_bytes_into_tree(entry_data) {
+                if !inner_tree.entries.is_empty() {
+                    return Ok(inner_tree);
+                }
+            }
+        }
+
+        // Also record standard POSIX entries in case the CPIO stream itself is a direct rootfs/initramfs
+        let fmt = (mode as u16) & 0xF000;
+        let perm = (mode as u16) & 0o7777;
+        if fmt == ubifs::S_IFDIR {
+            direct_tree.insert_dir_with_owner(&raw_name, if perm == 0 { 0o755 } else { perm }, uid, gid);
+        } else if fmt == ubifs::S_IFLNK {
+            let target = String::from_utf8_lossy(entry_data).to_string();
+            direct_tree.insert_symlink_with_owner(&raw_name, target, uid, gid);
+        } else if fmt == ubifs::S_IFREG {
+            direct_tree.insert_file_with_owner(
+                &raw_name,
+                entry_data.to_vec(),
+                if perm == 0 { 0o644 } else { perm },
+                uid,
+                gid,
+            );
+        }
+    }
+
+    if !direct_tree.entries.is_empty() {
+        return Ok(direct_tree);
+    }
+
+    Err("no extractable rootfs image or files found in CPIO archive".to_string())
+}
 
 pub(crate) fn decompress_zlib_or_deflate(input: &[u8]) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
@@ -47,6 +199,22 @@ fn detect_ubi_peb_size(raw: &[u8], first_data_offset: usize) -> usize {
 }
 
 pub fn extract_payload_bytes_into_tree(payload: &[u8]) -> Result<RootfsTree, String> {
+    if payload.starts_with(&[0x1f, 0x8b]) {
+        let mut dec = Vec::new();
+        if GzDecoder::new(Cursor::new(payload))
+            .read_to_end(&mut dec)
+            .is_ok()
+            && !dec.is_empty()
+        {
+            return extract_payload_bytes_into_tree(&dec);
+        }
+    }
+    if is_cpio_newc_archive(payload) {
+        return extract_cpio_into_tree(payload);
+    }
+    if payload.len() >= 4 && &payload[0..4] == UBI_EC_MAGIC {
+        return extract_ubi_into_tree(payload);
+    }
     if payload.len() >= 4 {
         let magic_le = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
         if magic_le == SQUASHFS_MAGIC {
@@ -159,8 +327,8 @@ pub fn extract_ubi_into_tree(raw: &[u8]) -> Result<RootfsTree, String> {
 #[cfg(test)]
 mod tests {
     use super::ubifs::{
-        S_IFDIR, S_IFLNK, S_IFREG, UBIFS_COMPR_NONE, UBIFS_DATA_NODE, UBIFS_DENT_NODE,
-        UBIFS_INO_NODE,
+        decompress_lzo1x, S_IFDIR, S_IFLNK, S_IFREG, UBIFS_COMPR_LZO, UBIFS_COMPR_NONE,
+        UBIFS_DATA_NODE, UBIFS_DENT_NODE, UBIFS_INO_NODE,
     };
     use super::*;
     use crate::image_builder::RootfsNodeKind;
@@ -394,5 +562,240 @@ mod tests {
         let tree = extract_ubi_into_tree(&ubi_sqsh).unwrap();
         assert_eq!(tree.get_file_bytes("hello.txt").unwrap(), file_content);
         assert_eq!(tree.get("hello.txt").unwrap().mode, 0o644);
+    }
+
+    fn build_ubifs_compressed_data_node(
+        sqnum: u64,
+        inum: u32,
+        block_num: u32,
+        uncomp_len: usize,
+        compr_type: u16,
+        compressed_payload: &[u8],
+    ) -> Vec<u8> {
+        let len = 48 + compressed_payload.len();
+        let mut buf = vec![0u8; (len + 7) & !7];
+        buf[0..4].copy_from_slice(&UBIFS_NODE_MAGIC.to_le_bytes());
+        buf[8..16].copy_from_slice(&sqnum.to_le_bytes());
+        buf[16..20].copy_from_slice(&(len as u32).to_le_bytes());
+        buf[20] = UBIFS_DATA_NODE;
+        buf[24..28].copy_from_slice(&inum.to_le_bytes());
+        let k1 = (1u32 << 29) | (block_num & 0x1FFF_FFFF);
+        buf[28..32].copy_from_slice(&k1.to_le_bytes());
+        buf[40..44].copy_from_slice(&(uncomp_len as u32).to_le_bytes());
+        buf[44..46].copy_from_slice(&compr_type.to_le_bytes());
+        buf[48..48 + compressed_payload.len()].copy_from_slice(compressed_payload);
+        buf
+    }
+
+    fn build_ubifs_pad_node(sqnum: u64, pad_len: u32) -> Vec<u8> {
+        let len = 28usize;
+        let mut buf = vec![0u8; (len + 7) & !7];
+        buf[0..4].copy_from_slice(&UBIFS_NODE_MAGIC.to_le_bytes());
+        buf[8..16].copy_from_slice(&sqnum.to_le_bytes());
+        buf[16..20].copy_from_slice(&(len as u32).to_le_bytes());
+        buf[20] = 5; // UBIFS_PAD_NODE
+        buf[24..28].copy_from_slice(&pad_len.to_le_bytes());
+        buf
+    }
+
+    fn append_cpio_entry(out: &mut Vec<u8>, magic: &[u8; 6], ino: u32, mode: u32, name: &str, data: &[u8]) {
+        let namesize = name.len() + 1;
+        let header = format!(
+            "{}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}",
+            std::str::from_utf8(magic).unwrap(),
+            ino,
+            mode,
+            0u32, // uid
+            0u32, // gid
+            1u32, // nlink
+            0u32, // mtime
+            data.len(),
+            0u32, // devmajor
+            0u32, // devminor
+            0u32, // rdevmajor
+            0u32, // rdevminor
+            namesize,
+            0u32  // check
+        );
+        assert_eq!(header.len(), 110);
+        out.extend_from_slice(header.as_bytes());
+        out.extend_from_slice(name.as_bytes());
+        out.push(0);
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(data);
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+    }
+
+    #[test]
+    fn test_lzo1x_decompressor_literals_m1_m2_m3_m4_and_overlapping_rle() {
+        // 1. Short initial literal (t = 3 < 4 -> direct Match -> EOF)
+        let short_stream = [17 + 3, b'A', b'B', b'C', 0x11, 0x00, 0x00];
+        let dec_short = decompress_lzo1x(&short_stream, 3).unwrap();
+        assert_eq!(dec_short, b"ABC");
+
+        // 2. Initial literal (t = 6 >= 4) + M2 match (len = 6, dist = 6) + 2 trailing literals + M1 match (len = 2, dist = 2) + EOF
+        // "quasar" (6 B) -> M2 copies "quasar" (dist 6, len 6) + trailing "!!" -> M1 copies "!!" (dist 2, len 2)
+        // M2: m_len = 6 -> (6 - 1) << 5 = 5 << 5 = 0xA0; d = 6 - 1 = 5 -> (5 & 7) << 2 = 0x14; trailing = 2 -> b0 = 0xB6, b1 = 0x00
+        // M1: t < 16, dist = 2 -> d = 1 -> (t >> 2) = 1, b1 = 0, trailing = 0 -> t = 0x04, b1 = 0x00
+        let mut m2_m1_stream = Vec::new();
+        m2_m1_stream.push(17 + 6);
+        m2_m1_stream.extend_from_slice(b"quasar");
+        m2_m1_stream.extend_from_slice(&[0xB6, 0x00]); // M2 len=6, dist=6, trailing=2
+        m2_m1_stream.extend_from_slice(b"!!"); // 2 trailing literals
+        m2_m1_stream.extend_from_slice(&[0x04, 0x00]); // M1 len=2, dist=2, trailing=0
+        m2_m1_stream.extend_from_slice(&[0x11, 0x00, 0x00]); // EOF
+        let dec_m2_m1 = decompress_lzo1x(&m2_m1_stream, 16).unwrap();
+        assert_eq!(dec_m2_m1, b"quasarquasar!!!!");
+
+        // 3. Long zero-extended literal run in OuterLoop (300 bytes) + overlapping M3 RLE match (len = 50, dist = 1)
+        let mut long_stream = Vec::new();
+        // t == 0 in OuterLoop: 300 = 3 + 15 + 255 + 27 -> [0x00, 0x00, 27]
+        long_stream.extend_from_slice(&[0x00, 0x00, 27]);
+        let mut expected = Vec::new();
+        for i in 0..300usize {
+            let b = b'a' + ((i % 26) as u8);
+            long_stream.push(b);
+            expected.push(b);
+        }
+        // Now in FirstLiteralRun: emit M3 match (32 <= t < 64) with zero-extended length 50 (m_len - 2 = 48 = 31 + 17)
+        // t = 0x20 (32, m_len & 31 == 0), next byte = 17 -> m_len = 31 + 17 + 2 = 50
+        // dist = 1 -> d = 0 -> v = (0 << 2) | 0 = 0x0000
+        long_stream.extend_from_slice(&[0x20, 17, 0x00, 0x00]);
+        let last_byte = *expected.last().unwrap();
+        expected.resize(expected.len() + 50, last_byte);
+        long_stream.extend_from_slice(&[0x11, 0x00, 0x00]); // EOF
+
+        let dec_long = decompress_lzo1x(&long_stream, expected.len()).unwrap();
+        assert_eq!(dec_long, expected);
+    }
+
+    #[test]
+    fn test_extract_cpio_newc_and_crc_with_ubifs_lzo1x_and_padded_lebs() {
+        // Build a UBIFS image containing:
+        // - /system/vendor/quasar/quasar.cfg (compressed with UBIFS_COMPR_LZO = 1)
+        // - /bin/busybox (compressed with UBIFS_COMPR_LZO = 1 across a padded LEB gap)
+        let cfg_plain = br#"{"deviceType": "yandexmini_2"}"#;
+        // Encode cfg_plain with LZO1X-1: initial literal of 16 bytes `{"deviceType": "` +
+        // OuterLoop literal or full initial literal + M2 match
+        let mut cfg_lzo = Vec::new();
+        cfg_lzo.push(17 + (cfg_plain.len() as u8));
+        cfg_lzo.extend_from_slice(cfg_plain);
+        cfg_lzo.extend_from_slice(&[0x11, 0x00, 0x00]);
+
+        // Encode busybox with LZO1X-1 using an M2 repetition: "\x7fELF-lzo-busybox-\x7fELF-lzo"
+        let bb_prefix = b"\x7fELF-lzo-busybox-";
+        let bb_plain = b"\x7fELF-lzo-busybox-\x7fELF-lzo";
+        let mut bb_lzo = Vec::new();
+        bb_lzo.push(17 + (bb_prefix.len() as u8));
+        bb_lzo.extend_from_slice(bb_prefix);
+        // M2 match: len = 8 ((8 - 1) << 5 = 0xE0), dist = 17 (d = 16 -> (16 & 7) << 2 = 0, b1 = 16 >> 3 = 2)
+        bb_lzo.extend_from_slice(&[0xE0, 0x02]);
+        bb_lzo.extend_from_slice(&[0x11, 0x00, 0x00]);
+        assert_eq!(decompress_lzo1x(&bb_lzo, bb_plain.len()).unwrap(), bb_plain);
+
+        let mut ubifs_img = Vec::new();
+        // LEB 0: root (1) -> system (2) -> vendor (3) -> quasar (4) -> quasar.cfg (5)
+        ubifs_img.extend_from_slice(&build_ubifs_ino_node(1, 1, S_IFDIR | 0o755, 0, 0, 0, b""));
+        ubifs_img.extend_from_slice(&build_ubifs_dent_node(2, 1, 2, 1, "system"));
+        ubifs_img.extend_from_slice(&build_ubifs_ino_node(3, 2, S_IFDIR | 0o755, 0, 0, 0, b""));
+        ubifs_img.extend_from_slice(&build_ubifs_dent_node(4, 2, 3, 1, "vendor"));
+        ubifs_img.extend_from_slice(&build_ubifs_ino_node(5, 3, S_IFDIR | 0o755, 0, 0, 0, b""));
+        ubifs_img.extend_from_slice(&build_ubifs_dent_node(6, 3, 4, 1, "quasar"));
+        ubifs_img.extend_from_slice(&build_ubifs_ino_node(7, 4, S_IFDIR | 0o755, 0, 0, 0, b""));
+        ubifs_img.extend_from_slice(&build_ubifs_dent_node(8, 4, 5, 0, "quasar.cfg"));
+        ubifs_img.extend_from_slice(&build_ubifs_ino_node(
+            9,
+            5,
+            S_IFREG | 0o644,
+            0,
+            0,
+            cfg_plain.len() as u64,
+            b"",
+        ));
+        ubifs_img.extend_from_slice(&build_ubifs_compressed_data_node(
+            10,
+            5,
+            0,
+            cfg_plain.len(),
+            UBIFS_COMPR_LZO,
+            &cfg_lzo,
+        ));
+
+        // Add UBIFS_PAD_NODE + 8192 bytes of 0xFF LEB padding + extra 4096 bytes of 0xFF tail
+        ubifs_img.extend_from_slice(&build_ubifs_pad_node(11, 8192));
+        ubifs_img.extend(std::iter::repeat_n(0xFFu8, 8192 + 4096));
+
+        // LEB 1: root (1) -> bin (6) -> busybox (7)
+        ubifs_img.extend_from_slice(&build_ubifs_dent_node(12, 1, 6, 1, "bin"));
+        ubifs_img.extend_from_slice(&build_ubifs_ino_node(13, 6, S_IFDIR | 0o755, 0, 0, 0, b""));
+        ubifs_img.extend_from_slice(&build_ubifs_dent_node(14, 6, 7, 0, "busybox"));
+        ubifs_img.extend_from_slice(&build_ubifs_ino_node(
+            15,
+            7,
+            S_IFREG | 0o755,
+            0,
+            0,
+            bb_plain.len() as u64,
+            b"",
+        ));
+        ubifs_img.extend_from_slice(&build_ubifs_compressed_data_node(
+            16,
+            7,
+            0,
+            bb_plain.len(),
+            UBIFS_COMPR_LZO,
+            &bb_lzo,
+        ));
+
+        for magic in [CPIO_NEWC_MAGIC, CPIO_CRC_MAGIC] {
+            let mut cpio_ota = Vec::new();
+            append_cpio_entry(
+                &mut cpio_ota,
+                magic,
+                1,
+                0o100644,
+                "sw-description",
+                b"software = { version = \"0.367\"; };",
+            );
+            append_cpio_entry(
+                &mut cpio_ota,
+                magic,
+                2,
+                0o100644,
+                "boot.img.encrypt",
+                b"AML-ENCRYPTED-KERNEL-STUB",
+            );
+            append_cpio_entry(
+                &mut cpio_ota,
+                magic,
+                3,
+                0o100644,
+                "dt.img.encrypt",
+                b"AML-ENCRYPTED-DTB-STUB",
+            );
+            append_cpio_entry(
+                &mut cpio_ota,
+                magic,
+                4,
+                0o100644,
+                "rootfs.ubifs",
+                &ubifs_img,
+            );
+            append_cpio_entry(&mut cpio_ota, magic, 5, 0, "TRAILER!!!", b"");
+
+            assert!(is_cpio_newc_archive(&cpio_ota));
+            let tree = extract_payload_bytes_into_tree(&cpio_ota).unwrap();
+            assert_eq!(
+                tree.get_file_bytes("system/vendor/quasar/quasar.cfg")
+                    .unwrap(),
+                cfg_plain
+            );
+            assert_eq!(tree.get_file_bytes("bin/busybox").unwrap(), bb_plain);
+            assert_eq!(tree.get("bin/busybox").unwrap().mode, 0o755);
+        }
     }
 }
