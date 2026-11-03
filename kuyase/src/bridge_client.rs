@@ -182,7 +182,10 @@ impl BridgeClient {
                 }
                 let rem = ack_deadline.saturating_duration_since(Instant::now());
                 if rem.is_zero() {
-                    return Err("timed out waiting for CommandAck from bridge".to_string());
+                    return Err(format!(
+                        "timed out waiting for CommandAck from bridge (cmd={:?})",
+                        cmd
+                    ));
                 }
                 let (next_guard, _) = cv.wait_timeout(guard, rem).unwrap();
                 guard = next_guard;

@@ -5,5 +5,6 @@ pub mod dumper;
 pub mod ext_fs;
 pub mod gui;
 pub mod image_builder;
+pub mod rootfs_tree;
 pub mod session;
 pub mod test_suite;

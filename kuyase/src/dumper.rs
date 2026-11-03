@@ -1,6 +1,5 @@
 use crate::adb::AdbClient;
 use crate::image_builder::sanitize_tar_gz_file;
-use protocol::normalize_board_slug;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,63 +29,7 @@ pub struct DumpResult {
 }
 
 pub fn detect_board_slug_from_probe(dev_type_cfg: &str, model_raw: &str) -> String {
-    let model_lc = model_raw.to_ascii_lowercase();
-    let model_compact: String = model_lc.chars().filter(|c| !c.is_whitespace()).collect();
-    if model_lc.contains("prune") {
-        return "plumnc".to_string();
-    }
-
-    // Disambiguate "Midi" by SoC / DT compatible before relying on `deviceType`:
-    // - Retail Station Midi is `cucumber` on Amlogic A5 (`amlogic,a5` / `yandex,cucumber`)
-    // - Retail Station 2 has internal DT name `yandex,station-midi` on Amlogic AXG (`amlogic,axg`)
-    if model_lc.contains("cucumber") {
-        return "cucumber".to_string();
-    }
-    if model_lc.contains("station-midi") && model_compact.contains("amlogic,axg") {
-        return "station2".to_string();
-    }
-
-    let dev = dev_type_cfg.trim();
-    if !dev.is_empty() && !dev.eq_ignore_ascii_case("unknown") {
-        if (dev.eq_ignore_ascii_case("yandexmidi") || dev.eq_ignore_ascii_case("midi"))
-            && model_compact.contains("amlogic,a5")
-        {
-            return "cucumber".to_string();
-        }
-        return normalize_board_slug(dev);
-    }
-
-    if model_lc.contains("cucumber") {
-        "cucumber".to_string()
-    } else if model_lc.contains("bergamot")
-        || model_lc.contains("yandexmini_3")
-        || model_lc.contains("yandexmini3")
-        || model_lc.contains("mini3")
-    {
-        "bergamot".to_string()
-    } else if model_lc.contains("pickle") {
-        "pickle".to_string()
-    } else if model_lc.contains("orion") {
-        "orion".to_string()
-    } else if model_lc.contains("plum") {
-        "plum".to_string()
-    } else if model_lc.contains("mango") || model_lc.contains("street") {
-        "mango".to_string()
-    } else if model_lc.contains("saturn") {
-        "saturn".to_string()
-    } else if model_lc.contains("station-midi") {
-        "station2".to_string()
-    } else if model_lc.contains("yandexmini2nc") || model_lc.contains("mini2nc") {
-        "yandexmini2nc".to_string()
-    } else if model_lc.contains("yandexmini_2") || model_lc.contains("mini2") {
-        "yandexmini2".to_string()
-    } else if model_lc.contains("yandexmicro") {
-        "yandexmicro".to_string()
-    } else if model_lc.contains("axg") {
-        "yandexmini".to_string()
-    } else {
-        "unknown".to_string()
-    }
+    protocol::detect_board_slug_from_probe(dev_type_cfg, model_raw)
 }
 
 pub fn format_utc_timestamp(time: SystemTime) -> String {
@@ -120,7 +63,7 @@ pub fn format_utc_timestamp(time: SystemTime) -> String {
 
 const PROBE_SCRIPT: &str = r#"
 DEV_TYPE=$(sed -n 's/.*"deviceType"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /system/vendor/quasar/quasar.cfg 2>/dev/null | head -n 1)
-MODEL=$(tr '\0\r\n' '   ' < /proc/device-tree/compatible 2>/dev/null; printf " "; tr '\0\r\n' '   ' < /proc/device-tree/model 2>/dev/null)
+MODEL=$(getprop ro.product.device 2>/dev/null || true; printf " "; getprop ro.product.model 2>/dev/null || true; printf " "; tr '\0\r\n' '   ' < /proc/device-tree/compatible 2>/dev/null; printf " "; tr '\0\r\n' '   ' < /proc/device-tree/amlogic-dt-id 2>/dev/null; printf " "; tr '\0\r\n' '   ' < /proc/device-tree/model 2>/dev/null)
 echo "KUYASE_DEV_TYPE=$DEV_TYPE"
 echo "KUYASE_MODEL=$MODEL"
 echo "KUYASE_PARTITIONS_START"

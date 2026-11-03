@@ -1,267 +1,21 @@
 use crate::archive_formats::{extract_payload_bytes_into_tree, extract_ubi_into_tree, UBI_EC_MAGIC};
 use crate::ext_fs::write_ext2_image;
+pub use crate::rootfs_tree::{
+    normalize_rel_path, read_tar_from_reader, read_tar_gz_into_tree, write_tree_to_tar_gz,
+    RootfsNode, RootfsNodeKind, RootfsTree,
+};
 use crate::session::{resolve_bridge_binary, EMBEDDED_HW_BRIDGE};
 use flate2::read::GzDecoder;
-use flate2::write::GzEncoder;
-use flate2::Compression;
-use protocol::normalize_board_slug;
-use std::collections::BTreeMap;
+pub use protocol::{
+    detect_board_hint_from_filename, detect_board_hint_from_path, normalize_board_slug,
+};
 use std::fs::{self, File};
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
-use tar::{Archive, Builder, EntryType, Header};
 
 pub const EMBEDDED_INIT_SH: &[u8] = include_bytes!("../../guest-init/equasar-qemu-init.sh");
 pub const EMBEDDED_S99_YAM: &[u8] = include_bytes!("../../guest-init/S99kuyase-yam");
 pub const DEFAULT_DATA_IMAGE_SIZE_BYTES: u64 = 512 * 1024 * 1024;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RootfsNodeKind {
-    Dir,
-    File(Vec<u8>),
-    Symlink(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RootfsNode {
-    pub kind: RootfsNodeKind,
-    pub mode: u16,
-    pub uid: u16,
-    pub gid: u16,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RootfsTree {
-    pub entries: BTreeMap<String, RootfsNode>,
-}
-
-pub fn normalize_rel_path(raw: &str) -> Option<String> {
-    let replaced = raw.replace('\\', "/");
-    let mut parts = Vec::new();
-    for seg in replaced.split('/') {
-        match seg {
-            "" | "." => continue,
-            ".." => {
-                parts.pop();
-            }
-            other => parts.push(other),
-        }
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("/"))
-    }
-}
-
-impl RootfsTree {
-    pub fn insert_dir(&mut self, path: &str, mode: u16) {
-        self.insert_dir_with_owner(path, mode, 0, 0);
-    }
-
-    pub fn insert_dir_with_owner(&mut self, path: &str, mode: u16, uid: u16, gid: u16) {
-        if let Some(norm) = normalize_rel_path(path) {
-            self.entries.insert(
-                norm,
-                RootfsNode {
-                    kind: RootfsNodeKind::Dir,
-                    mode: if mode == 0 { 0o755 } else { mode & 0o7777 },
-                    uid,
-                    gid,
-                },
-            );
-        }
-    }
-
-    pub fn insert_file(&mut self, path: &str, data: Vec<u8>, mode: u16) {
-        self.insert_file_with_owner(path, data, mode, 0, 0);
-    }
-
-    pub fn insert_file_with_owner(
-        &mut self,
-        path: &str,
-        data: Vec<u8>,
-        mode: u16,
-        uid: u16,
-        gid: u16,
-    ) {
-        if let Some(norm) = normalize_rel_path(path) {
-            self.entries.insert(
-                norm,
-                RootfsNode {
-                    kind: RootfsNodeKind::File(data),
-                    mode: if mode == 0 { 0o644 } else { mode & 0o7777 },
-                    uid,
-                    gid,
-                },
-            );
-        }
-    }
-
-    pub fn insert_symlink(&mut self, path: &str, target: String) {
-        self.insert_symlink_with_owner(path, target, 0, 0);
-    }
-
-    pub fn insert_symlink_with_owner(&mut self, path: &str, target: String, uid: u16, gid: u16) {
-        if let Some(norm) = normalize_rel_path(path) {
-            self.entries.insert(
-                norm,
-                RootfsNode {
-                    kind: RootfsNodeKind::Symlink(target),
-                    mode: 0o777,
-                    uid,
-                    gid,
-                },
-            );
-        }
-    }
-
-    pub fn get(&self, path: &str) -> Option<&RootfsNode> {
-        let norm = normalize_rel_path(path)?;
-        self.entries.get(&norm)
-    }
-
-    pub fn get_file_bytes(&self, path: &str) -> Option<&[u8]> {
-        match &self.get(path)?.kind {
-            RootfsNodeKind::File(b) => Some(b.as_slice()),
-            _ => None,
-        }
-    }
-}
-
-pub fn read_tar_from_reader<R: Read>(reader: R) -> Result<RootfsTree, String> {
-    let mut archive = Archive::new(reader);
-    let mut tree = RootfsTree::default();
-    let entries = archive.entries().map_err(|e| format!("tar read error: {}", e))?;
-    for entry_res in entries {
-        let mut entry = entry_res.map_err(|e| format!("tar entry error: {}", e))?;
-        let raw_path = entry
-            .path()
-            .map_err(|e| format!("tar path error: {}", e))?
-            .to_string_lossy()
-            .to_string();
-        let Some(norm) = normalize_rel_path(&raw_path) else {
-            continue;
-        };
-        let mode = (entry.header().mode().unwrap_or(0o644) as u16) & 0o7777;
-        let uid = (entry.header().uid().unwrap_or(0) & 0xFFFF) as u16;
-        let gid = (entry.header().gid().unwrap_or(0) & 0xFFFF) as u16;
-        match entry.header().entry_type() {
-            EntryType::Directory => {
-                tree.insert_dir_with_owner(&norm, if mode == 0 { 0o755 } else { mode }, uid, gid)
-            }
-            EntryType::Symlink => {
-                if let Ok(Some(link)) = entry.link_name() {
-                    tree.insert_symlink_with_owner(
-                        &norm,
-                        link.to_string_lossy().to_string(),
-                        uid,
-                        gid,
-                    );
-                }
-            }
-            EntryType::Regular | EntryType::Continuous => {
-                let mut buf = Vec::new();
-                entry
-                    .read_to_end(&mut buf)
-                    .map_err(|e| format!("tar file read error: {}", e))?;
-                tree.insert_file_with_owner(
-                    &norm,
-                    buf,
-                    if mode == 0 { 0o644 } else { mode },
-                    uid,
-                    gid,
-                );
-            }
-            _ => {}
-        }
-    }
-
-    // If the tar archive wraps a single filesystem image (e.g., `plum-system.ext4` inside `plum-system.tar.gz`),
-    // automatically unpack the inner filesystem image into the RootfsTree.
-    if tree.entries.len() == 1 {
-        let (only_name, only_node) = tree.entries.iter().next().unwrap();
-        if let RootfsNodeKind::File(ref bytes) = only_node.kind {
-            if bytes.len() >= 2048 {
-                let inner_fname = Path::new(only_name)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(only_name.as_str());
-                let board_hint = detect_board_hint_from_filename(inner_fname);
-                if let Ok(mut inner_tree) = extract_payload_bytes_into_tree(bytes) {
-                    if !inner_tree.entries.is_empty() {
-                        if let Some(slug) = board_hint {
-                            if inner_tree.get("etc/quasar-board").is_none() {
-                                inner_tree.insert_file(
-                                    "etc/quasar-board",
-                                    format!("{}\n", slug).into_bytes(),
-                                    0o644,
-                                );
-                            }
-                        }
-                        return Ok(inner_tree);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(tree)
-}
-
-pub fn read_tar_gz_into_tree(path: &Path) -> Result<RootfsTree, String> {
-    let file = File::open(path).map_err(|e| format!("failed to open '{}': {}", path.display(), e))?;
-    let gz = GzDecoder::new(file);
-    read_tar_from_reader(gz)
-}
-
-pub fn write_tree_to_tar_gz(tree: &RootfsTree, path: &Path) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let file =
-        File::create(path).map_err(|e| format!("failed to create '{}': {}", path.display(), e))?;
-    let gz = GzEncoder::new(file, Compression::fast());
-    let mut builder = Builder::new(gz);
-
-    for (rel, node) in &tree.entries {
-        let mut header = Header::new_gnu();
-        header.set_uid(node.uid as u64);
-        header.set_gid(node.gid as u64);
-        header.set_mtime(0);
-        match &node.kind {
-            RootfsNodeKind::Dir => {
-                header.set_entry_type(EntryType::Directory);
-                header.set_mode(node.mode as u32);
-                header.set_size(0);
-                header.set_cksum();
-                builder
-                    .append_data(&mut header, format!("{}/", rel), std::io::empty())
-                    .map_err(|e| e.to_string())?;
-            }
-            RootfsNodeKind::File(bytes) => {
-                header.set_entry_type(EntryType::Regular);
-                header.set_mode(node.mode as u32);
-                header.set_size(bytes.len() as u64);
-                header.set_cksum();
-                builder
-                    .append_data(&mut header, rel, Cursor::new(bytes))
-                    .map_err(|e| e.to_string())?;
-            }
-            RootfsNodeKind::Symlink(target) => {
-                header.set_entry_type(EntryType::Symlink);
-                header.set_mode(0o777);
-                header.set_size(0);
-                builder
-                    .append_link(&mut header, rel, target)
-                    .map_err(|e| e.to_string())?;
-            }
-        }
-    }
-    let gz = builder.into_inner().map_err(|e| e.to_string())?;
-    gz.finish().map_err(|e| e.to_string())?;
-    Ok(())
-}
 
 pub fn sanitize_tar_gz_file(path: &Path) -> Result<usize, String> {
     let mut tree = read_tar_gz_into_tree(path)?;
@@ -272,72 +26,6 @@ pub fn sanitize_tar_gz_file(path: &Path) -> Result<usize, String> {
     Ok(removed)
 }
 
-pub fn detect_board_hint_from_filename(name: &str) -> Option<String> {
-    let lower = name.trim().to_ascii_lowercase();
-    for suffix in [
-        "-system.tar.gz",
-        "-system.tgz",
-        "-system.tar",
-        "-system.ext4",
-        "-system-orig.ext4",
-        "-rootfs.tar.gz",
-        "-rootfs.tgz",
-    ] {
-        if let Some(prefix) = lower.strip_suffix(suffix) {
-            if !prefix.is_empty() {
-                return Some(normalize_board_slug(prefix));
-            }
-        }
-    }
-    if let Some(rest) = lower.strip_prefix("dump-") {
-        if let Some((slug_raw, _)) = rest.split_once('-') {
-            if !slug_raw.is_empty() {
-                return Some(normalize_board_slug(slug_raw));
-            }
-        } else if !rest.is_empty() {
-            return Some(normalize_board_slug(rest));
-        }
-    }
-    let normalized = normalize_board_slug(&lower);
-    if matches!(
-        normalized.as_str(),
-        "yandexmini"
-            | "yandexmini2"
-            | "yandexmini2nc"
-            | "yandexmicro"
-            | "plum"
-            | "plumnc"
-            | "station2"
-            | "cucumber"
-            | "orion"
-            | "bergamot"
-            | "pickle"
-            | "mango"
-            | "saturn"
-    ) {
-        return Some(normalized);
-    }
-    None
-}
-
-pub fn detect_board_hint_from_path(path: &Path) -> Option<String> {
-    if let Some(fname) = path.file_name().and_then(|s| s.to_str()) {
-        if let Some(slug) = detect_board_hint_from_filename(fname) {
-            return Some(slug);
-        }
-    }
-    if let Some(parent_name) = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|s| s.to_str())
-    {
-        if let Some(slug) = detect_board_hint_from_filename(parent_name) {
-            return Some(slug);
-        }
-    }
-    None
-}
-
 pub fn detect_board_from_tree(tree: &RootfsTree) -> String {
     if let Some(board_bytes) = tree.get_file_bytes("etc/quasar-board") {
         let slug = String::from_utf8_lossy(board_bytes).trim().to_string();
@@ -346,6 +34,22 @@ pub fn detect_board_from_tree(tree: &RootfsTree) -> String {
         }
     }
 
+    // 1. Hardware DTB overlay and DSP firmware files take priority over `quasar.cfg`
+    //    (where Station 2 on Amlogic AXG uses `deviceType: "yandexmidi"`).
+    if tree.get("boot/yandex-cucumber-i2ctop-overlay.dtb").is_some() {
+        return "cucumber".to_string();
+    }
+    if tree.get("boot/yandex-orion-i2c_top-overlay.dtb").is_some() {
+        return "orion".to_string();
+    }
+    if tree.get("lib/firmware/mango-acm8625.cfg").is_some() {
+        return "mango".to_string();
+    }
+    if tree.get("lib/firmware/bergamot-acm8625.cfg").is_some() {
+        return "bergamot".to_string();
+    }
+
+    // 2. Fallback to `quasar.cfg` (disambiguating NC variants by platform IDs)
     if let Some(cfg_bytes) = tree.get_file_bytes("system/vendor/quasar/quasar.cfg") {
         let text = String::from_utf8_lossy(cfg_bytes);
         if let Some(pos) = text.find("\"deviceType\"") {
@@ -371,16 +75,8 @@ pub fn detect_board_from_tree(tree: &RootfsTree) -> String {
         }
     }
 
-    if tree.get("lib/firmware/bergamot-acm8625.cfg").is_some() {
-        "bergamot".to_string()
-    } else if tree.get("lib/firmware/mango-acm8625.cfg").is_some() {
-        "mango".to_string()
-    } else if tree.get("etc/init.d/S61leds_brightness").is_some() {
+    if tree.get("etc/init.d/S61leds_brightness").is_some() {
         "yandexmini2".to_string()
-    } else if tree.get("boot/yandex-cucumber-i2ctop-overlay.dtb").is_some() {
-        "cucumber".to_string()
-    } else if tree.get("boot/yandex-orion-i2c_top-overlay.dtb").is_some() {
-        "orion".to_string()
     } else {
         "yandexmini".to_string()
     }
