@@ -797,36 +797,6 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
-    fn append_test_cpio_entry(out: &mut Vec<u8>, ino: u32, mode: u32, name: &str, data: &[u8]) {
-        let namesize = name.len() + 1;
-        let header = format!(
-            "070702{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}",
-            ino,
-            mode,
-            0u32,
-            0u32,
-            1u32,
-            0u32,
-            data.len(),
-            0u32,
-            0u32,
-            0u32,
-            0u32,
-            namesize,
-            0u32
-        );
-        out.extend_from_slice(header.as_bytes());
-        out.extend_from_slice(name.as_bytes());
-        out.push(0);
-        while out.len() % 4 != 0 {
-            out.push(0);
-        }
-        out.extend_from_slice(data);
-        while out.len() % 4 != 0 {
-            out.push(0);
-        }
-    }
-
     fn build_synthetic_lzo_ubifs_rootfs() -> Vec<u8> {
         use crate::archive_formats::UBIFS_NODE_MAGIC;
 
@@ -936,10 +906,13 @@ mod tests {
         )
         .unwrap();
 
+        use crate::archive_formats::{append_test_cpio_entry, CPIO_CRC_MAGIC};
+
         let ubifs_bytes = build_synthetic_lzo_ubifs_rootfs();
         let mut cpio_bytes = Vec::new();
         append_test_cpio_entry(
             &mut cpio_bytes,
+            CPIO_CRC_MAGIC,
             1,
             0o100644,
             "sw-description",
@@ -947,6 +920,7 @@ mod tests {
         );
         append_test_cpio_entry(
             &mut cpio_bytes,
+            CPIO_CRC_MAGIC,
             2,
             0o100644,
             "boot.img.encrypt",
@@ -954,6 +928,7 @@ mod tests {
         );
         append_test_cpio_entry(
             &mut cpio_bytes,
+            CPIO_CRC_MAGIC,
             3,
             0o100644,
             "dt.img.encrypt",
@@ -961,12 +936,13 @@ mod tests {
         );
         append_test_cpio_entry(
             &mut cpio_bytes,
+            CPIO_CRC_MAGIC,
             4,
             0o100644,
             "rootfs.ubifs",
             &ubifs_bytes,
         );
-        append_test_cpio_entry(&mut cpio_bytes, 5, 0, "TRAILER!!!", b"");
+        append_test_cpio_entry(&mut cpio_bytes, CPIO_CRC_MAGIC, 5, 0, "TRAILER!!!", b"");
 
         // 1. Raw swupdate CPIO archive named `update.zip`
         let cpio_zip_path = temp_dir.join("update.zip");
@@ -1016,7 +992,10 @@ mod tests {
 
     #[test]
     fn test_prepare_guest_image_from_real_station_updates_ota_if_present() {
-        let real_ota = Path::new(r"G:\STATION_UPDATES\update.zip");
+        let Some(ota_env) = std::env::var_os("KUYASE_TEST_OTA_PATH") else {
+            return;
+        };
+        let real_ota = Path::new(&ota_env);
         if !real_ota.is_file() {
             return;
         }

@@ -328,18 +328,19 @@ impl BridgeState {
     }
 
     pub fn handle_playback_control(&self, method_id: u64) {
-        match method_id {
-            0 => {
+        use crate::proto::remoting::PlaybackControlCapabilityMethod;
+        match method_id as u32 {
+            PlaybackControlCapabilityMethod::PLAY => {
                 self.player_playing.store(true, Ordering::SeqCst);
                 self.append_maind_log("[sdk] PlaybackControlCapability: PLAY (playing=true)");
                 self.log("IPC :9875 -> PlaybackControlCapabilityMethod PLAY (0)");
             }
-            1 => {
+            PlaybackControlCapabilityMethod::PAUSE => {
                 self.player_playing.store(false, Ordering::SeqCst);
                 self.append_maind_log("[sdk] PlaybackControlCapability: PAUSE (playing=false)");
                 self.log("IPC :9875 -> PlaybackControlCapabilityMethod PAUSE (1)");
             }
-            2 => {
+            PlaybackControlCapabilityMethod::TOGGLE_PLAY_PAUSE => {
                 let prev = self.player_playing.fetch_xor(true, Ordering::SeqCst);
                 let now_playing = !prev;
                 self.append_maind_log(&format!(
@@ -351,7 +352,7 @@ impl BridgeState {
                     now_playing
                 ));
             }
-            6 => {
+            PlaybackControlCapabilityMethod::NEXT => {
                 let track = self
                     .player_track_index
                     .fetch_add(1, Ordering::SeqCst)
@@ -365,7 +366,7 @@ impl BridgeState {
                     track
                 ));
             }
-            7 => {
+            PlaybackControlCapabilityMethod::PREV => {
                 let cur = self.player_track_index.load(Ordering::SeqCst);
                 let prev_track = cur.saturating_sub(1).max(1);
                 self.player_track_index.store(prev_track, Ordering::SeqCst);

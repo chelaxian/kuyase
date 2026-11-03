@@ -501,13 +501,14 @@ pub fn execute_glagol_command_json(
         true,
     );
 
+    use crate::proto::remoting::PlaybackControlCapabilityMethod;
     match cmd_name {
         "play" => {
-            state.handle_playback_control(0);
+            state.handle_playback_control(u64::from(PlaybackControlCapabilityMethod::PLAY));
             state.log(format!("Glagol :1961 ({}) -> command=play", peer_addr));
         }
         "pause" => {
-            state.handle_playback_control(1);
+            state.handle_playback_control(u64::from(PlaybackControlCapabilityMethod::PAUSE));
             state.log(format!("Glagol :1961 ({}) -> command=pause", peer_addr));
         }
         "stop" => {
@@ -519,11 +520,11 @@ pub fn execute_glagol_command_json(
             state.log(format!("Glagol :1961 ({}) -> command=stop", peer_addr));
         }
         "next" => {
-            state.handle_playback_control(6);
+            state.handle_playback_control(u64::from(PlaybackControlCapabilityMethod::NEXT));
             state.log(format!("Glagol :1961 ({}) -> command=next", peer_addr));
         }
         "prev" | "previous" => {
-            state.handle_playback_control(7);
+            state.handle_playback_control(u64::from(PlaybackControlCapabilityMethod::PREV));
             state.log(format!("Glagol :1961 ({}) -> command=prev", peer_addr));
         }
         "setVolume" | "volume" => {
@@ -932,20 +933,8 @@ pub fn spawn_glagol_external_server(state: Arc<BridgeState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::{LogMessage, QuasarMessage, QuasarMessageType};
+    use crate::proto::{decode_hex, LogMessage, QuasarMessage, QuasarMessageType};
     use crate::state::BoardProfile;
-
-    fn decode_hex(hex: &str) -> Vec<u8> {
-        let clean: Vec<u8> = hex.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
-        assert_eq!(clean.len() % 2, 0, "hex string must have even length");
-        clean
-            .chunks(2)
-            .map(|pair| {
-                let s = std::str::from_utf8(pair).unwrap();
-                u8::from_str_radix(s, 16).unwrap()
-            })
-            .collect()
-    }
 
     fn make_test_state() -> Arc<BridgeState> {
         let profile = BoardProfile {

@@ -15,8 +15,8 @@ _Avoid_: `deviceType`, модель, маркетинговое название
 _Avoid_: менеджер драйверов, глобальный синглтон железа.
 
 **Системный дамп (`Firmware Dump`)**:
-Сырой слепок только системного раздела колонки (`rootfs.tar.gz`, `ubi0_0_rootfs.img`, `mtd3_system.bin` или `system.img`), снятый через `kuyase dump <ip>`, окно «Образы и QEMU...» в GUI или автономные скрипты `scripts/dump-from-adb.sh` / `.ps1`, и не содержащий пользовательских разделов (`/data`, `/bkupgrade`) и ключей устройства.
-_Avoid_: бэкап, прошивка OTA, образ эмулятора.
+Сырой слепок системного раздела колонки (`rootfs.tar.gz`, `ubi0_0_rootfs.img`, `mtd3_system.bin`, `system.img` или OTA-архив `swupdate` `update.zip` с `rootfs.ubifs`), снятый через `kuyase dump <ip>`, окно «Образы и QEMU...» в GUI или автономные скрипты `scripts/dump-from-adb.sh` / `.ps1`, и не содержащий пользовательских разделов (`/data`, `/bkupgrade`) и ключей устройства.
+_Avoid_: бэкап, образ эмулятора.
 
 **Базовый образ (`Base Image`)**:
 Очищенное в памяти виртуальное дерево корневой файловой системы (`RootfsTree`), распакованное в userspace из системного дампа до инжекции гостевого инициализатора и аппаратного моста.
@@ -73,7 +73,7 @@ _Avoid_: экран, матричный дисплей.
 ### Голосовой тракт и локальный IPC
 
 **Стек Quasar (`Quasar Stack`)**:
-Проприетарный набор пользовательских демонов Яндекса в `/system/vendor/quasar` (`maind`, `aliced`, `yio_audio`, `iohub_services`), взаимодействующих по локальным TCP-сокетам фреймами `[u32_le_len][QuasarMessage]`.
+Проприетарный набор пользовательских демонов и утилит Яндекса в `/system/vendor/quasar` (`quasar_launcher2`, `maind`, `begemot`, `q`, сервисы `aliced` `:9875`, `yio_audio` `:9850`, `iohub_services` `:9903`, `glagold` `:9899` и внешний HTTP/WebSocket-сервер Glagol `:1961`), взаимодействующих по локальным TCP-сокетам фреймами `[u32_le_len][QuasarMessage]` (в прямом формате полей `<= 0.367` либо двухполевом конверте `payload = 252, type = 253` в `>= 0.368`).
 _Avoid_: YaOS, Android-стек, клиентское приложение.
 
 **Инжекция голоса (`Voice Injection`)**:

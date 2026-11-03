@@ -921,20 +921,22 @@ esac
 # Station 3 (orion): the firmware dbus build faults on this kernel, so start the
 # packaged ARMhf dbus-daemon from the installed AirPlay package when available;
 # on all other boards that ship /usr/bin/dbus-daemon, start `dbus-daemon --system --fork`.
-if [ "$BOARD" = "orion" ]; then
-  AP=$(ls -d /data/yam/pkgs/station/airplay/*/share/luna/plugins/station.airplay 2>/dev/null | head -n 1 || true)
-  if [ -n "$AP" ] && [ -x "$AP/bin/dbus-daemon" ] && [ -x "$AP/lib/ld-linux-armhf.so.3" ]; then
+if [ "$MODE" = "full" ]; then
+  if [ "$BOARD" = "orion" ]; then
+    AP=$(ls -d /data/yam/pkgs/station/airplay/*/share/luna/plugins/station.airplay 2>/dev/null | head -n 1 || true)
+    if [ -n "$AP" ] && [ -x "$AP/bin/dbus-daemon" ] && [ -x "$AP/lib/ld-linux-armhf.so.3" ]; then
+      if ! pidof dbus-daemon >/dev/null 2>&1; then
+        rm -f /run/dbus/pid 2>/dev/null || true
+        "$AP/lib/ld-linux-armhf.so.3" --library-path "$AP/lib" "$AP/bin/dbus-daemon" \
+          --config-file=/tmp/kuyase-bus.conf --fork >/tmp/dbus.log 2>&1 || true
+      fi
+    fi
+  elif [ -x /usr/bin/dbus-daemon ]; then
     if ! pidof dbus-daemon >/dev/null 2>&1; then
       rm -f /run/dbus/pid 2>/dev/null || true
-      "$AP/lib/ld-linux-armhf.so.3" --library-path "$AP/lib" "$AP/bin/dbus-daemon" \
-        --config-file=/tmp/kuyase-bus.conf --fork >/tmp/dbus.log 2>&1 || true
+      dbus-daemon --system --fork >/tmp/dbus.log 2>&1 || \
+        dbus-daemon --config-file=/tmp/kuyase-bus.conf --fork >/tmp/dbus.log 2>&1 || true
     fi
-  fi
-elif [ -x /usr/bin/dbus-daemon ]; then
-  if ! pidof dbus-daemon >/dev/null 2>&1; then
-    rm -f /run/dbus/pid 2>/dev/null || true
-    dbus-daemon --system --fork >/tmp/dbus.log 2>&1 || \
-      dbus-daemon --config-file=/tmp/kuyase-bus.conf --fork >/tmp/dbus.log 2>&1 || true
   fi
 fi
 

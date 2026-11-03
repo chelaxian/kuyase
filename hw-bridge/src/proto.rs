@@ -176,6 +176,11 @@ pub fn build_alice_listening_event_with_format(wire_format: QuasarWireFormat) ->
     build_alice_state_event_with_format(Some(1), "", "", false, wire_format)
 }
 
+/// `AliceState` phase 0 = `IDLE` (`NONE`) state event packet.
+pub fn build_alice_idle_event_with_format(wire_format: QuasarWireFormat) -> Vec<u8> {
+    build_alice_state_event_with_format(Some(0), "", "", false, wire_format)
+}
+
 /// Builds a framed `QuasarMessage` containing `Remoting { remote_object_id = "EndpointStorage_",
 /// endpoint_storage_method = ADD_ENDPOINT }` with `storage_name = "aliced"` on every capability
 /// holder so `q cli` (`maind --cli`) registers `PlaybackControlCapability`, `AliceCapability`,
@@ -671,20 +676,21 @@ pub fn build_glagol_log_message_packet(
 }
 
 #[cfg(test)]
+pub(crate) fn decode_hex(hex: &str) -> Vec<u8> {
+    let clean: Vec<u8> = hex.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    assert_eq!(clean.len() % 2, 0, "hex string must have even length");
+    clean
+        .chunks(2)
+        .map(|pair| {
+            let s = std::str::from_utf8(pair).unwrap();
+            u8::from_str_radix(s, 16).unwrap()
+        })
+        .collect()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-
-    fn decode_hex(hex: &str) -> Vec<u8> {
-        let clean: Vec<u8> = hex.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
-        assert_eq!(clean.len() % 2, 0, "hex string must have even length");
-        clean
-            .chunks(2)
-            .map(|pair| {
-                let s = std::str::from_utf8(pair).unwrap();
-                u8::from_str_radix(s, 16).unwrap()
-            })
-            .collect()
-    }
 
     fn pb_field<'a>(buf: &'a [u8], wanted: u32) -> Option<PbField<'a>> {
         let mut pos = 0usize;

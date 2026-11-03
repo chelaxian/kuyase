@@ -1,0 +1,392 @@
+syntax = "proto2";
+
+package quasar.proto;
+
+// Canonical multi-generation Quasar Stack Protobuf schema (`1.266.4.40`, `0.13.1.36`,
+// `0.367.1.6`, `0.368+`, `0.369.1.*`, `0.373.1.13`).
+// Parsed by `scripts/gen_quasar_proto.py` to generate `hw-bridge/src/proto/*.rs`.
+
+message EmptyMessage {
+}
+
+message LogMessage {
+  optional string msg = 4;
+}
+
+message VolumeState {
+  optional bool sound_muted = 1;
+  optional int32 sound_level = 2;
+  optional int32 sound_max_level = 3;
+  optional string source = 5;
+  optional int32 exact_volume = 7;
+}
+
+message VolumeSetMessage {
+  optional int32 sound_level = 1;
+  optional bool sound_muted = 2;
+  optional string source = 4;
+}
+
+message SimplePlayerState {
+  optional bool has_pause = 1;
+  optional bool has_play = 2;
+  optional string title = 3;
+  optional string subtitle = 4;
+  optional bool has_next = 5;
+  optional bool has_prev = 6;
+  optional double progress = 7;
+  optional double duration = 8;
+}
+
+message DirectiveHandler {
+  optional string name = 1;
+  optional string endpoint_id = 2;
+  repeated string supported_directive_names = 3;
+}
+
+message TAnyCapabilityHolder {
+  enum ECapabilityType {
+    DEVICE_STATE_CAPABILITY_TYPE = 17;
+    VOLUME_CAPABILITY_TYPE = 23;
+    AUDIO_FILE_PLAYER_CAPABILITY_TYPE = 24;
+    AUDIO_PLAYER_CAPABILITY_TYPE = 46;
+    ALICE_CAPABILITY_TYPE = 51;
+    PLAYBACK_CONTROL_CAPABILITY_TYPE = 54;
+  }
+
+  optional bytes raw_capability = 1;
+  optional uint32 capability_type = 2;
+}
+
+message Capability {
+  optional string id = 1;
+  optional DirectiveHandler directive_handler = 2;
+  optional bytes capability = 3;
+  optional bytes packed_capability = 4;
+  optional bool is_private = 5;
+  optional TAnyCapabilityHolder any_capability = 6;
+}
+
+message CapabilityHolder {
+  optional Capability capability = 1;
+  optional string storage_name = 2;
+}
+
+message TEndpoint {
+  enum EEndpointType {
+    SPEAKER_ENDPOINT_TYPE = 1;
+  }
+
+  enum EEndpointStatus {
+    STATUS_ONLINE = 2;
+  }
+
+  optional string id = 1;
+  optional bytes meta = 2;
+  optional bytes status = 4;
+  repeated TAnyCapabilityHolder any_capabilities = 5;
+}
+
+message Endpoint {
+  optional TEndpoint endpoint = 1;
+  repeated CapabilityHolder capabilities = 2;
+  optional DirectiveHandler directive_handler = 3;
+  optional string endpoint_owner_id = 4;
+}
+
+message EndpointStorageMethod {
+  enum Method {
+    ADD_ENDPOINT = 0;
+    REMOVE_ENDPOINT = 1;
+    SYNC_ENDPOINTS = 2;
+  }
+
+  optional string id = 1;
+  optional Method method = 2;
+  repeated Endpoint endpoints = 3;
+  optional string storage_name = 4;
+}
+
+message EndpointMethod {
+  enum Method {
+    ADD_CAPABILITY = 0;
+    REMOVE_CAPABILITY = 1;
+    SYNC_STATE = 2;
+  }
+
+  optional Method method = 2;
+  optional Capability capability = 3;
+  optional TEndpoint state = 4;
+  optional string id = 5;
+  optional string storage_name = 6;
+}
+
+message FilePlayerCapabilityMethod {
+  enum Method {
+    PLAY_SOUND_FILE = 0;
+    STOP_SOUND_FILE = 1;
+    HANDSHAKE_REQUEST = 2;
+  }
+
+  optional Method method = 1;
+  optional string file_path = 2;
+  optional uint32 channel = 3;
+  optional bool send_events = 5;
+  optional uint32 stored_sound = 6;
+}
+
+message FilePlayerCapabilityEventsMethod {
+  optional EmptyMessage handshake_response = 2;
+}
+
+message PlaybackControlCapabilityMethod {
+  enum Method {
+    PLAY = 0;
+    PAUSE = 1;
+    TOGGLE_PLAY_PAUSE = 2;
+    REWIND = 3;
+    LIKE = 4;
+    DISLIKE = 5;
+    NEXT = 6;
+    PREV = 7;
+  }
+
+  optional Method method = 1;
+  optional bool can_request_music = 2;
+  optional uint32 rewind_amount_ms = 3;
+  optional uint32 rewind_type = 4;
+  optional string track_id = 6;
+  optional bool disable_animation = 7;
+}
+
+message TDeviceState {
+  optional int32 sound_level = 2;
+  optional bool sound_muted = 3;
+  optional bool mics_muted = 26;
+}
+
+message DeviceStateCapabilityMethod {
+  optional bool is_tv_plugged_in = 17;
+  optional bool mics_muted = 21;
+  optional VolumeState volume_state = 22;
+  optional bool is_default_assistant = 33;
+  optional TDeviceState device_state = 36;
+  optional string device_id = 37;
+}
+
+message AliceState {
+  enum State {
+    STATE_NONE = 0;
+    STATE_IDLE = 1;
+    STATE_LISTENING = 2;
+    STATE_SPEAKING = 3;
+    STATE_BUSY = 4;
+  }
+
+  optional State state = 1;
+  optional string recognized_phrase = 2;
+  optional double voice_power = 5;
+  optional string request_id = 7;
+  optional bool has_speech = 8;
+  optional double doa_angle = 11;
+  optional bytes request_state = 15;
+}
+
+message VinsRequest {
+  optional string id = 1;
+  optional string event_json = 2;
+  optional bool is_spotter = 3;
+  optional bool is_parallel = 16;
+  optional uint32 event_source = 18;
+}
+
+message TVocalizeDirective {
+  optional string text = 1;
+  optional uint32 vocalize_mode = 2;
+  optional string voice = 3;
+  optional string emotion = 4;
+  optional string language = 5;
+}
+
+message AliceCapabilityMethod {
+  enum Method {
+    START_REQUEST = 0;
+    CANCEL_DIALOG = 1;
+    START_CONVERSATION = 2;
+    STOP_CONVERSATION = 3;
+    TOGGLE_CONVERSATION = 4;
+    FINISH_CONVERSATION_VOICE_INPUT = 5;
+    CANCEL_DIALOG_AND_CLEAR_QUEUE = 6;
+    STOP_TTS = 14;
+    START_VOCALIZE = 18;
+  }
+
+  optional Method method = 1;
+  optional VinsRequest vins_request = 2;
+  optional bool events = 3;
+  optional string source_id = 4;
+  optional bool silent = 7;
+  optional string request_id = 10;
+  optional TVocalizeDirective vocalize_directive = 13;
+  optional string dialog_id = 14;
+}
+
+message AliceCapabilityListenerMethod {
+  enum Method {
+    STATE_CHANGED = 0;
+    TTS_COMPLETED = 1;
+    ON_ALICE_REQUEST = 2;
+    ON_ALICE_RESPONSE = 3;
+    ON_ALICE_ERROR = 4;
+    ALL_STARTUP_SETTINGS_CHANGED = 5;
+    TTS_STARTED = 6;
+    RECOGNITION_COMPLETED = 7;
+  }
+
+  optional Method method = 1;
+  optional AliceState state = 2;
+  optional VinsRequest alice_request = 3;
+  optional string request_id = 11;
+}
+
+message Remoting {
+  optional EndpointStorageMethod endpoint_storage_method = 1;
+  optional EndpointMethod endpoint_method = 6;
+  optional string remote_object_id = 7;
+  optional AliceCapabilityMethod alice_capability_method = 8;
+  optional FilePlayerCapabilityMethod file_player_capability_method = 12;
+  optional PlaybackControlCapabilityMethod playback_control_capability_method = 13;
+  optional DeviceStateCapabilityMethod device_state_capability_method = 16;
+  optional FilePlayerCapabilityEventsMethod file_player_capability_events_method = 17;
+  optional AliceCapabilityListenerMethod alice_capability_listener_method = 18;
+  optional string process_id = 25;
+}
+
+message IOControlCommand {
+  optional string external_directives = 95;
+}
+
+message IOHubMessage {
+  optional EmptyMessage retrieve_state = 1;
+}
+
+message IOEvent {
+  optional bytes sdk_state = 22;
+}
+
+message IOAudioChannelData {
+  enum Type {
+    TYPE_RAW_MIC = 1;
+    TYPE_VQE_OMNI = 6;
+  }
+
+  enum Format {
+    FORMAT_PCM = 1;
+  }
+
+  optional uint32 channel_type = 1;
+  optional string name = 2;
+  optional bytes data = 3;
+  optional bool is_for_recognition = 4;
+  optional float legacy_doa_float = 5;
+  optional double doa_angle = 6;
+  optional uint32 sample_rate = 7;
+  optional uint32 format = 8;
+}
+
+message IOAudioChannelsData {
+  repeated IOAudioChannelData channels = 1;
+}
+
+message IOChannelRequest {
+  optional uint32 channel_type = 1;
+}
+
+message GlagolDiscoveryItem {
+  optional string name = 1;
+  optional string device_id = 2;
+  optional string platform = 3;
+  optional string address = 5;
+  optional string legacy_name = 6;
+  optional string legacy_address = 7;
+  optional bool is_local_connection_allowed = 8;
+  optional bool legacy_is_local_connection_allowed = 10;
+}
+
+message GlagolDiscoveryRequest {
+  optional EmptyMessage subscribe = 1;
+  optional EmptyMessage unsubscribe = 2;
+  optional EmptyMessage force_rediscover = 3;
+  optional EmptyMessage account_devices_list = 5;
+  optional EmptyMessage debug_connections = 8;
+}
+
+message GlagolDiscoveryResult {
+  repeated GlagolDiscoveryItem items = 1;
+  repeated GlagolDiscoveryItem removed_items = 2;
+  optional EmptyMessage is_full_result = 3;
+}
+
+message GlagoldState {
+  repeated bytes connections = 1;
+  repeated string cluster_device_list = 7;
+  optional string public_ip = 8;
+}
+
+message GlagolClusterMessage {
+  optional string destination_device_id = 1;
+  optional string quasar_message_base64 = 3;
+}
+
+message QuasarMessage {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    ALICE_STATE = 3;
+    MEDIA_REQUEST = 8;
+    MEDIA_MESSAGE = 27;
+    APP_STATE = 33;
+    VOLUME_STATE = 42;
+    VOLUME_SET_MESSAGE = 78;
+    GLAGOLD_STATE = 82;
+    SIMPLE_PLAYER_STATE = 84;
+    IO_EVENT = 85;
+    IO_CONTROL = 88;
+    ON_MEDIA_ERROR = 124;
+    AUDIO_CLIENT_EVENT = 127;
+    SERVICE_NAME_READY = 157;
+    IO_AUDIO_CHANNELS_DATA = 158;
+    IO_CHANNEL_REQUEST = 159;
+    GLAGOL_CLUSTER_MESSAGE = 181;
+    GLAGOL_CLUSTER_SIGN = 182;
+    IO_HUB_MESSAGE = 183;
+    LOG_MESSAGE = 184;
+    GLAGOL_DISCOVERY_REQUEST = 185;
+    GLAGOL_DISCOVERY_UPDATED = 186;
+    GLAGOL_DISCOVERY_RESULT = 187;
+    REMOTING = 210;
+    DIRECTIVE = 211;
+    CONFIG_CAPABILITY_EVENTS = 236;
+    CONFIG_CAPABILITY_SUBSCRIPTIONS = 237;
+    HOLD_UPDATE_APPLY = 260;
+  }
+
+  optional string request_id = 1;
+  optional AliceState alice_state = 3;
+  optional VolumeState volume_state = 42;
+  optional VolumeSetMessage volume_set_message = 78;
+  optional GlagoldState glagold_state = 82;
+  optional SimplePlayerState simple_player_state = 84;
+  optional IOEvent io_event = 85;
+  optional IOControlCommand io_control = 88;
+  optional string service_name_ready = 157;
+  optional IOAudioChannelsData io_audio_channels_data = 158;
+  optional IOChannelRequest io_channel_request = 159;
+  optional GlagolClusterMessage glagol_cluster_message = 181;
+  optional IOHubMessage io_hub_message = 183;
+  optional LogMessage log_message = 184;
+  optional GlagolDiscoveryRequest glagol_discovery_request = 185;
+  optional GlagolDiscoveryResult glagol_discovery_result = 187;
+  optional Remoting remoting = 210;
+  optional bytes payload = 252;
+  optional Type type = 253;
+}

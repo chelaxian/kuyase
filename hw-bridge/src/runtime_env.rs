@@ -265,6 +265,31 @@ fn run_idle_daemon_stub(applet_name: &str) -> ! {
     }
 }
 
+fn notify_launcher2_start_to_bridge() {
+    let _ = fs::create_dir_all("/tmp/daemons_logs");
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(CANONICAL_MAIND_LOG)
+    {
+        let _ = writeln!(f, "[quasar_launcher2] Starting quasar services (stub mode)");
+    }
+    let wf = crate::proto::QuasarWireFormat::detect_from_firmware();
+    let payload = crate::proto::QuasarMessage::encode_with_format(
+        crate::proto::QuasarMessageType::SERVICE_NAME_READY,
+        b"quasar_launcher2",
+        wf,
+    );
+    let framed = crate::proto::frame_quasar_packet(&payload);
+    if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], 9903)),
+        Duration::from_millis(150),
+    ) {
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(150)));
+        let _ = stream.write_all(&framed);
+    }
+}
+
 fn run_quasar_launcher2_stub() -> ! {
     set_process_comm("quasar_launcher");
     setup_stub_signals(true);
@@ -273,6 +298,7 @@ fn run_quasar_launcher2_stub() -> ! {
     // never print `mkfifo: /tmp/loop_capture_pcm: File exists`.
     let _ = fs::remove_file(LOOP_CAPTURE_FIFO);
     ensure_idle_stubs_running();
+    notify_launcher2_start_to_bridge();
     detach_stdio_and_extra_fds();
     loop {
         ensure_idle_stubs_running();
@@ -523,7 +549,15 @@ pub fn ensure_quasar_cfg_dev_config_under(root: &Path) {
             "\n   \"devConfig\" : {\n      \"backendUrl\" : \"https://quasar.yandex.ru/dev\",\n      \"devFlag\" : \"${DATA}/devFlag\"\n   },",
         );
         patched.push_str(&raw[open_brace + 1..]);
-        let _ = fs::write(&cfg_path, patched);
+        if root == Path::new("/") {
+            let _ = fs::create_dir_all(STUB_DIR);
+            let ram_cfg = format!("{}/quasar.cfg", STUB_DIR);
+            if fs::write(&ram_cfg, &patched).is_ok() {
+                let _ = bind_mount_file(&ram_cfg, "/system/vendor/quasar/quasar.cfg");
+            }
+        } else {
+            let _ = fs::write(&cfg_path, patched);
+        }
     }
 }
 

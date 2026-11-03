@@ -1030,10 +1030,9 @@ pub fn run_dbus_stub_applet() -> ! {
 }
 
 /// Ensures `dbus-daemon --system` and the background `org.bluez` + `org.bluealsa` D-Bus
-/// wire-protocol responder are active on `/run/dbus/system_bus_socket`.
+/// wire-protocol responder are active on `/run/dbus/system_bus_socket` when `Full Mode` is enabled.
 pub fn ensure_system_dbus_and_bluez_stub(board_slug: &str, full_mode: bool) {
-    let has_dbus_daemon = Path::new("/usr/bin/dbus-daemon").exists();
-    if !full_mode && !has_dbus_daemon && board_slug != "orion" {
+    if !full_mode {
         return;
     }
 
@@ -1049,8 +1048,7 @@ pub fn ensure_system_dbus_and_bluez_stub(board_slug: &str, full_mode: bool) {
             run_dbus_responder_loop(ready_clone);
         });
 
-        let wait_ms = if full_mode { 350 } else { 100 };
-        let deadline = Instant::now() + Duration::from_millis(wait_ms);
+        let deadline = Instant::now() + Duration::from_millis(350);
         while Instant::now() < deadline {
             if ready.load(Ordering::SeqCst) {
                 break;

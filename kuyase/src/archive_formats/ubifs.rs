@@ -450,7 +450,7 @@ pub fn extract_ubifs_into_tree(raw: &[u8]) -> Result<RootfsTree, String> {
                 if replace {
                     let decoded = match compr_type {
                         UBIFS_COMPR_NONE => payload[..payload.len().min(uncomp_len)].to_vec(),
-                        UBIFS_COMPR_LZO => decompress_lzo1x(payload, uncomp_len).unwrap_or_default(),
+                        UBIFS_COMPR_LZO => decompress_lzo1x(payload, uncomp_len)?,
                         UBIFS_COMPR_ZLIB => {
                             decompress_zlib_or_deflate(payload).unwrap_or_default()
                         }

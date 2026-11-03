@@ -1,10 +1,10 @@
 use crate::audio::play_expressive_tts_to_alsa;
 use crate::proto::{
-    build_alice_listening_event_with_format, build_alice_voice_event_with_format,
-    build_endpoint_storage_add_endpoint_packet, build_file_player_handshake_response_packet,
-    build_yio_audio_frame_with_format, decode_quasar_io_control_packet,
-    decode_quasar_remoting_packet_with_format, frame_quasar_packet, DecodedIoHubPacket,
-    DecodedRemoting, QuasarMessage, QuasarWireFormat,
+    build_alice_idle_event_with_format, build_alice_listening_event_with_format,
+    build_alice_voice_event_with_format, build_endpoint_storage_add_endpoint_packet,
+    build_file_player_handshake_response_packet, build_yio_audio_frame_with_format,
+    decode_quasar_io_control_packet, decode_quasar_remoting_packet_with_format,
+    frame_quasar_packet, DecodedIoHubPacket, DecodedRemoting, QuasarMessage, QuasarWireFormat,
 };
 use crate::state::{AliceState, BridgeState};
 pub use crate::glagol::spawn_glagold_ipc_server;
@@ -65,13 +65,18 @@ pub fn spawn_yio_audio_server(state: Arc<BridgeState>) {
     });
 }
 
-/// Clients subscribed to `aliced`'s event stream (Luna's `/speech/next` or `q cli`).
+/// Client subscribed to `aliced`'s event stream (Luna's `/speech/next` or `q cli`).
 /// Each subscriber tracks its negotiated `QuasarWireFormat` (`LegacyDirect` vs `Envelope252`).
-static SPEECH_WRITERS: OnceLock<Mutex<Vec<(u64, std::net::TcpStream, QuasarWireFormat)>>> =
-    OnceLock::new();
+struct SpeechSubscriber {
+    id: u64,
+    stream: std::net::TcpStream,
+    format: QuasarWireFormat,
+}
+
+static SPEECH_WRITERS: OnceLock<Mutex<Vec<SpeechSubscriber>>> = OnceLock::new();
 static NEXT_SPEECH_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
-fn speech_writers() -> &'static Mutex<Vec<(u64, std::net::TcpStream, QuasarWireFormat)>> {
+fn speech_writers() -> &'static Mutex<Vec<SpeechSubscriber>> {
     SPEECH_WRITERS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
@@ -81,9 +86,9 @@ pub fn speech_subscribers() -> usize {
 
 fn update_client_wire_format(client_id: u64, wf: QuasarWireFormat) {
     if let Ok(mut clients) = speech_writers().lock() {
-        for (id, _, client_wf) in clients.iter_mut() {
-            if *id == client_id {
-                *client_wf = wf;
+        for sub in clients.iter_mut() {
+            if sub.id == client_id {
+                sub.format = wf;
             }
         }
     }
@@ -93,9 +98,19 @@ pub fn broadcast_alice_listening_state() {
     let Ok(mut clients) = speech_writers().lock() else {
         return;
     };
-    clients.retain_mut(|(_, client, wf)| {
-        let pkt = frame_quasar_packet(&build_alice_listening_event_with_format(*wf));
-        client.write_all(&pkt).is_ok()
+    clients.retain_mut(|sub| {
+        let pkt = frame_quasar_packet(&build_alice_listening_event_with_format(sub.format));
+        sub.stream.write_all(&pkt).is_ok()
+    });
+}
+
+pub fn broadcast_alice_idle_packet() {
+    let Ok(mut clients) = speech_writers().lock() else {
+        return;
+    };
+    clients.retain_mut(|sub| {
+        let pkt = frame_quasar_packet(&build_alice_idle_event_with_format(sub.format));
+        sub.stream.write_all(&pkt).is_ok()
     });
 }
 
@@ -106,14 +121,14 @@ pub fn broadcast_alice_speech(transcript: &str, request_id: &str) {
     let Ok(mut clients) = speech_writers().lock() else {
         return;
     };
-    clients.retain_mut(|(_, client, wf)| {
-        let mut buf = frame_quasar_packet(&build_alice_listening_event_with_format(*wf));
+    clients.retain_mut(|sub| {
+        let mut buf = frame_quasar_packet(&build_alice_listening_event_with_format(sub.format));
         buf.extend(frame_quasar_packet(&build_alice_voice_event_with_format(
             transcript,
             request_id,
-            *wf,
+            sub.format,
         )));
-        client.write_all(&buf).is_ok()
+        sub.stream.write_all(&buf).is_ok()
     });
 }
 
@@ -131,7 +146,11 @@ pub fn spawn_aliced_ipc_server(state: Arc<BridgeState>) {
             if let Ok(writer) = stream.try_clone() {
                 let _ = writer.set_write_timeout(Some(Duration::from_millis(200)));
                 if let Ok(mut clients) = speech_writers().lock() {
-                    clients.push((client_id, writer, initial_wf));
+                    clients.push(SpeechSubscriber {
+                        id: client_id,
+                        stream: writer,
+                        format: initial_wf,
+                    });
                 }
             }
             thread::spawn(move || {
@@ -197,6 +216,8 @@ pub fn spawn_aliced_ipc_server(state: Arc<BridgeState>) {
                                     ));
                                     if next_state == AliceState::Listening {
                                         broadcast_alice_listening_state();
+                                    } else {
+                                        broadcast_alice_idle_packet();
                                     }
                                     st.log(format!(
                                         "IPC :9875 -> TOGGLE_CONVERSATION (4) -> {}",
@@ -287,7 +308,7 @@ pub fn spawn_aliced_ipc_server(state: Arc<BridgeState>) {
                     }
                 }
                 if let Ok(mut clients) = speech_writers().lock() {
-                    clients.retain(|(id, _, _)| *id != client_id);
+                    clients.retain(|sub| sub.id != client_id);
                 }
             });
         }

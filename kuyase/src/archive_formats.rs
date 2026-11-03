@@ -325,6 +325,46 @@ pub fn extract_ubi_into_tree(raw: &[u8]) -> Result<RootfsTree, String> {
 }
 
 #[cfg(test)]
+pub(crate) fn append_test_cpio_entry(
+    out: &mut Vec<u8>,
+    magic: &[u8; 6],
+    ino: u32,
+    mode: u32,
+    name: &str,
+    data: &[u8],
+) {
+    let namesize = name.len() + 1;
+    let header = format!(
+        "{}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}",
+        std::str::from_utf8(magic).unwrap(),
+        ino,
+        mode,
+        0u32, // uid
+        0u32, // gid
+        1u32, // nlink
+        0u32, // mtime
+        data.len(),
+        0u32, // devmajor
+        0u32, // devminor
+        0u32, // rdevmajor
+        0u32, // rdevminor
+        namesize,
+        0u32 // check
+    );
+    assert_eq!(header.len(), 110);
+    out.extend_from_slice(header.as_bytes());
+    out.extend_from_slice(name.as_bytes());
+    out.push(0);
+    while out.len() % 4 != 0 {
+        out.push(0);
+    }
+    out.extend_from_slice(data);
+    while out.len() % 4 != 0 {
+        out.push(0);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::ubifs::{
         decompress_lzo1x, S_IFDIR, S_IFLNK, S_IFREG, UBIFS_COMPR_LZO, UBIFS_COMPR_NONE,
@@ -598,38 +638,6 @@ mod tests {
         buf
     }
 
-    fn append_cpio_entry(out: &mut Vec<u8>, magic: &[u8; 6], ino: u32, mode: u32, name: &str, data: &[u8]) {
-        let namesize = name.len() + 1;
-        let header = format!(
-            "{}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}{:08X}",
-            std::str::from_utf8(magic).unwrap(),
-            ino,
-            mode,
-            0u32, // uid
-            0u32, // gid
-            1u32, // nlink
-            0u32, // mtime
-            data.len(),
-            0u32, // devmajor
-            0u32, // devminor
-            0u32, // rdevmajor
-            0u32, // rdevminor
-            namesize,
-            0u32  // check
-        );
-        assert_eq!(header.len(), 110);
-        out.extend_from_slice(header.as_bytes());
-        out.extend_from_slice(name.as_bytes());
-        out.push(0);
-        while out.len() % 4 != 0 {
-            out.push(0);
-        }
-        out.extend_from_slice(data);
-        while out.len() % 4 != 0 {
-            out.push(0);
-        }
-    }
-
     #[test]
     fn test_lzo1x_decompressor_literals_m1_m2_m3_m4_and_overlapping_rle() {
         // 1. Short initial literal (t = 3 < 4 -> direct Match -> EOF)
@@ -753,7 +761,7 @@ mod tests {
 
         for magic in [CPIO_NEWC_MAGIC, CPIO_CRC_MAGIC] {
             let mut cpio_ota = Vec::new();
-            append_cpio_entry(
+            append_test_cpio_entry(
                 &mut cpio_ota,
                 magic,
                 1,
@@ -761,7 +769,7 @@ mod tests {
                 "sw-description",
                 b"software = { version = \"0.367\"; };",
             );
-            append_cpio_entry(
+            append_test_cpio_entry(
                 &mut cpio_ota,
                 magic,
                 2,
@@ -769,7 +777,7 @@ mod tests {
                 "boot.img.encrypt",
                 b"AML-ENCRYPTED-KERNEL-STUB",
             );
-            append_cpio_entry(
+            append_test_cpio_entry(
                 &mut cpio_ota,
                 magic,
                 3,
@@ -777,7 +785,7 @@ mod tests {
                 "dt.img.encrypt",
                 b"AML-ENCRYPTED-DTB-STUB",
             );
-            append_cpio_entry(
+            append_test_cpio_entry(
                 &mut cpio_ota,
                 magic,
                 4,
@@ -785,7 +793,7 @@ mod tests {
                 "rootfs.ubifs",
                 &ubifs_img,
             );
-            append_cpio_entry(&mut cpio_ota, magic, 5, 0, "TRAILER!!!", b"");
+            append_test_cpio_entry(&mut cpio_ota, magic, 5, 0, "TRAILER!!!", b"");
 
             assert!(is_cpio_newc_archive(&cpio_ota));
             let tree = extract_payload_bytes_into_tree(&cpio_ota).unwrap();

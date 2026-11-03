@@ -240,16 +240,39 @@ pub fn ensure_alsa_compat_lib() {
         // `/system/vendor/quasar/libs/libasound.so.2.0.0` is absent and Buildroot's
         // `/usr/lib/libasound.so.2.0.0` was compiled with `--without-versioned` (no `DT_VERDEF`),
         // whereas `/system/vendor/quasar/maind` and `libquasar_gstreamer.so` have `DT_VERNEED`
-        // entries for `libasound.so.2` (`ALSA_0.9`, `ALSA_0.9.0rc4`). Strip the leading
-        // `libasound.so.2` `Verneed` entry in-place when `/usr/lib/libasound.so.2.0.0` has no
-        // `ALSA_0.9` version definitions so `ld-linux-armhf.so.3` never prints
-        // `libasound.so.2: no version information available`.
+        // entries for `libasound.so.2` (`ALSA_0.9`, `ALSA_0.9.0rc4`). Copy them to RAM
+        // (`/tmp/.kuyase-stubs/`), strip the leading `libasound.so.2` `Verneed` entry on the RAM
+        // copies, and bind-mount them over `/system/vendor/quasar/maind` and
+        // `/system/vendor/quasar/libs/libquasar_gstreamer.so` so `ld-linux-armhf.so.3` never
+        // prints `libasound.so.2: no version information available` without mutating the rootfs.
         if usr_libasound_lacks_verdef(Path::new("/usr/lib/libasound.so.2.0.0")) {
-            for target in [
-                "/system/vendor/quasar/maind",
-                "/system/vendor/quasar/libs/libquasar_gstreamer.so",
+            let _ = fs::create_dir_all("/tmp/.kuyase-stubs");
+            for (target, ram_copy) in [
+                (
+                    "/system/vendor/quasar/maind",
+                    "/tmp/.kuyase-stubs/maind-patched",
+                ),
+                (
+                    "/system/vendor/quasar/libs/libquasar_gstreamer.so",
+                    "/tmp/.kuyase-stubs/libquasar_gstreamer.so",
+                ),
             ] {
-                let _ = strip_elf32_alsa_verneed_in_place(Path::new(target));
+                if Path::new(target).is_file() {
+                    if !Path::new(ram_copy).is_file() {
+                        if fs::copy(target, ram_copy).is_ok() {
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt;
+                                let _ = fs::set_permissions(
+                                    ram_copy,
+                                    fs::Permissions::from_mode(0o755),
+                                );
+                            }
+                            let _ = strip_elf32_alsa_verneed_in_place(Path::new(ram_copy));
+                        }
+                    }
+                    let _ = crate::runtime_env::bind_mount_file(ram_copy, target);
+                }
             }
         }
         return;
@@ -417,15 +440,26 @@ pub fn strip_elf32_alsa_verneed_in_place(path: &Path) -> bool {
         return false;
     }
 
+    #[derive(Default, Clone, Copy)]
+    struct ElfSectionSpan {
+        sh_pos: usize,
+        sh_type: u32,
+        sh_addr: u64,
+        sh_offset: usize,
+        sh_info: u32,
+    }
+
     let mut dynstr_sec = (0u64, 0usize);
     let mut gnu_ver_sec = (0u64, 0usize);
-    let mut verneed_sec = (0usize, 0u32, 0u64, 0usize, 0u32);
+    let mut verneed_sec = ElfSectionSpan::default();
+    let mut verneed_size = 0usize;
     let mut dynamic_sec = (0u64, 0usize);
 
     for i in 0..e_shnum {
         let off = i * e_shentsize;
         let sh_name = read_u32(&sh_table, off) as usize;
-        let sh_addr = read_u32(&sh_table, off + 12);
+        let sh_type = read_u32(&sh_table, off + 4);
+        let sh_addr = read_u32(&sh_table, off + 12) as u64;
         let sh_offset = read_u32(&sh_table, off + 16) as u64;
         let sh_size = read_u32(&sh_table, off + 20) as usize;
         let sh_info = read_u32(&sh_table, off + 28);
@@ -440,7 +474,16 @@ pub fn strip_elf32_alsa_verneed_in_place(path: &Path) -> bool {
         match &shstrtab[sh_name..name_end] {
             b".dynstr" => dynstr_sec = (sh_offset, sh_size),
             b".gnu.version" => gnu_ver_sec = (sh_offset, sh_size),
-            b".gnu.version_r" => verneed_sec = (i, sh_addr, sh_offset, sh_size, sh_info),
+            b".gnu.version_r" => {
+                verneed_sec = ElfSectionSpan {
+                    sh_pos: i,
+                    sh_type,
+                    sh_addr,
+                    sh_offset: sh_offset as usize,
+                    sh_info,
+                };
+                verneed_size = sh_size;
+            }
             b".dynamic" => dynamic_sec = (sh_offset, sh_size),
             _ => {}
         }
@@ -448,8 +491,9 @@ pub fn strip_elf32_alsa_verneed_in_place(path: &Path) -> bool {
 
     if dynstr_sec.1 == 0
         || gnu_ver_sec.1 == 0
-        || verneed_sec.3 < 16
-        || verneed_sec.4 <= 1
+        || verneed_sec.sh_type == 0
+        || verneed_size < 16
+        || verneed_sec.sh_info <= 1
         || dynamic_sec.1 == 0
     {
         return false;
@@ -459,8 +503,10 @@ pub fn strip_elf32_alsa_verneed_in_place(path: &Path) -> bool {
     if file.seek(SeekFrom::Start(dynstr_sec.0)).is_err() || file.read_exact(&mut dynstr).is_err() {
         return false;
     }
-    let mut verneed = vec![0u8; verneed_sec.3];
-    if file.seek(SeekFrom::Start(verneed_sec.2)).is_err()
+    let mut verneed = vec![0u8; verneed_size];
+    if file
+        .seek(SeekFrom::Start(verneed_sec.sh_offset as u64))
+        .is_err()
         || file.read_exact(&mut verneed).is_err()
     {
         return false;
@@ -539,11 +585,11 @@ pub fn strip_elf32_alsa_verneed_in_place(path: &Path) -> bool {
         return false;
     }
 
-    let sec_hdr_off = verneed_sec.0 * e_shentsize;
-    let new_sh_addr = verneed_sec.1.wrapping_add(vn_next);
-    let new_sh_offset = (verneed_sec.2 as u32).wrapping_add(vn_next);
-    let new_sh_size = (verneed_sec.3 as u32).saturating_sub(vn_next);
-    let new_sh_info = verneed_sec.4.saturating_sub(1);
+    let sec_hdr_off = verneed_sec.sh_pos * e_shentsize;
+    let new_sh_addr = (verneed_sec.sh_addr as u32).wrapping_add(vn_next);
+    let new_sh_offset = (verneed_sec.sh_offset as u32).wrapping_add(vn_next);
+    let new_sh_size = (verneed_size as u32).saturating_sub(vn_next);
+    let new_sh_info = verneed_sec.sh_info.saturating_sub(1);
     sh_table[sec_hdr_off + 12..sec_hdr_off + 16].copy_from_slice(&new_sh_addr.to_le_bytes());
     sh_table[sec_hdr_off + 16..sec_hdr_off + 20].copy_from_slice(&new_sh_offset.to_le_bytes());
     sh_table[sec_hdr_off + 20..sec_hdr_off + 24].copy_from_slice(&new_sh_size.to_le_bytes());
