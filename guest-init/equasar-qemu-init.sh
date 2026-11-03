@@ -6,13 +6,19 @@ export LD_LIBRARY_PATH=/bkupgrade/data/opt/lib:/system/workdir/lib:/system/vendo
 
 mount -t proc proc /proc 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-mkdir -p /dev/pts /dev/shm /tmp /run /sys /var/run /root /bkupgrade
+mkdir -p /dev/pts /dev/shm /tmp /run /sys /var /root /bkupgrade
 [ -L /data ] || mkdir -p /data
 mount -t devpts devpts /dev/pts 2>/dev/null || true
 mount -t tmpfs tmpfs /dev/shm 2>/dev/null || true
 mount -t tmpfs tmpfs /tmp 2>/dev/null || true
 mount -t tmpfs tmpfs /run 2>/dev/null || true
-mount -t tmpfs tmpfs /var/run 2>/dev/null || true
+# Stage 1 of Full Mode D-Bus / BlueZ support:
+# Unify /run and /var/run via symlink (/var/run -> /run) instead of mounting two separate
+# tmpfs instances so /run/dbus/system_bus_socket and /var/run/dbus/system_bus_socket
+# resolve to the same socket across all Board Profiles.
+rm -rf /var/run 2>/dev/null || true
+ln -sfn /run /var/run 2>/dev/null || true
+mkdir -p /run/dbus /run/avahi
 
 # Optional persistent /data:
 # - quasar.data=persist mounts a spare virtio disk (ext4) onto /data (or its symlink target)
@@ -72,7 +78,7 @@ fi
 mount -t tmpfs tmpfs /sys 2>/dev/null || true
 
 chmod 666 /dev/ptmx /dev/null /dev/zero /dev/urandom /dev/tty 2>/dev/null || true
-mkdir -p /tmp/daemons_logs /var/run \
+mkdir -p /tmp/daemons_logs /run/dbus /run/avahi \
          /bkupgrade/data/quasar/daemons_logs /bkupgrade/data/quasar/data /bkupgrade/data/quasar/logs \
          /bkupgrade/data/opt/bin /bkupgrade/data/opt/lib \
          /data/quasar/daemons_logs /data/quasar/data /data/quasar/logs
@@ -828,15 +834,7 @@ fi
 
 echo "=== [Quasar QEMU Emulator] Booting board=$BOARD maind_mode=$MODE ==="
 
-# 9. Start native Quasar maind stack first when maind_mode=full (otherwise qemu-hw-bridge runs the autonomous IPC/TTS stub)
-if [ "$MODE" = "full" ] && [ -x /system/vendor/quasar/onboot.sh ]; then
-  echo "=== Starting native Quasar maind stack (/system/vendor/quasar/onboot.sh start) ==="
-  /system/vendor/quasar/onboot.sh start >/tmp/quasar-onboot.log 2>&1 &
-  sleep 0.4
-fi
-
-# 10. Start Virtual Speaker Twin & Hardware Bridge (:8091)
-# If host passed an updated qemu-hw-bridge binary via second virtio drive (/dev/vdb), hot-update it before launch
+# If host passed an updated qemu-hw-bridge binary via second virtio drive (/dev/vdb), hot-update it first.
 # The bridge can arrive on /dev/vdc as well as /dev/vdb (depending on whether a
 # data disk is attached); a copy on the persistent /data disk wins.
 for _brdev in /dev/vdc /dev/vdb; do
@@ -850,6 +848,97 @@ if [ -x /data/qemu-hw-bridge ]; then
   cp -f /data/qemu-hw-bridge /usr/local/bin/qemu-hw-bridge 2>/dev/null || true
   chmod 0755 /usr/local/bin/qemu-hw-bridge 2>/dev/null || true
 fi
+
+# 8b. Three-stage D-Bus system bus & org.bluez / org.bluealsa initialization BEFORE onboot.sh:
+# Native BlueZ-based `maind --platformd` builds (0.13+, 0.369+, 0.373+) initialize sdbus-c++
+# on startup and abort with `sdbus::Error` unless:
+#   (1) /var/run -> /run is unified so /run/dbus/system_bus_socket is reachable (`FileNotFound`),
+#   (2) /usr/libexec/dbus-daemon-launch-helper has mode 04750 and owner 0:85 (`Spawn.PermissionsInvalid`),
+#   (3) `dbus-daemon --system` and the `org.bluez` + `org.bluealsa` responder are active before
+#       `onboot.sh` launches `maind --platformd` (`NoReply`).
+mkdir -p /run/dbus /run/avahi /usr/local/var/run 2>/dev/null || true
+chown 85:85 /run/dbus 2>/dev/null || true
+chown 86:86 /run/avahi 2>/dev/null || true
+ln -sfn /run/dbus /usr/local/var/run/dbus 2>/dev/null || true
+
+if [ -e /usr/libexec/dbus-daemon-launch-helper ]; then
+  chown 0:85 /usr/libexec/dbus-daemon-launch-helper 2>/dev/null || true
+  chmod 04750 /usr/libexec/dbus-daemon-launch-helper 2>/dev/null || true
+fi
+
+cat > /tmp/kuyase-bus.conf << 'BUSEOF'
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>system</type>
+  <listen>unix:path=/run/dbus/system_bus_socket</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow user="*"/>
+    <allow own="*"/>
+    <allow send_type="method_call"/>
+    <allow send_destination="*"/>
+    <allow receive_sender="*"/>
+  </policy>
+</busconfig>
+BUSEOF
+
+if [ -d /etc/dbus-1 ]; then
+  mkdir -p /etc/dbus-1/system.d 2>/dev/null || true
+  cat > /etc/dbus-1/system.d/kuyase-allow-all.conf << 'POLCEOF'
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <policy context="default">
+    <allow user="*"/>
+    <allow own="*"/>
+    <allow send_type="method_call"/>
+    <allow send_destination="*"/>
+    <allow receive_sender="*"/>
+  </policy>
+</busconfig>
+POLCEOF
+fi
+
+if [ -d /usr/share/dbus-1/system-services ]; then
+  cat > /usr/share/dbus-1/system-services/org.bluez.service << 'SVCEOF'
+[D-BUS Service]
+Name=org.bluez
+Exec=/usr/local/bin/qemu-hw-bridge --dbus-stub
+User=root
+SVCEOF
+fi
+
+# AirPlay on Midi/Station 3 needs the packaged Avahi D-Bus policy on disk.
+case "$BOARD" in
+  cucumber|orion)
+    AP_POLICY=$(ls /data/yam/pkgs/station/airplay/*/share/luna/plugins/station.airplay/config/avahi-dbus.conf 2>/dev/null | head -n 1 || true)
+    if [ -n "$AP_POLICY" ]; then
+      mkdir -p /etc/dbus-1/system.d
+      cp -f "$AP_POLICY" /etc/dbus-1/system.d/avahi-dbus.conf 2>/dev/null || true
+    fi
+    ;;
+esac
+
+# Station 3 (orion): the firmware dbus build faults on this kernel, so start the
+# packaged ARMhf dbus-daemon from the installed AirPlay package when available;
+# on all other boards that ship /usr/bin/dbus-daemon, start `dbus-daemon --system --fork`.
+if [ "$BOARD" = "orion" ]; then
+  AP=$(ls -d /data/yam/pkgs/station/airplay/*/share/luna/plugins/station.airplay 2>/dev/null | head -n 1 || true)
+  if [ -n "$AP" ] && [ -x "$AP/bin/dbus-daemon" ] && [ -x "$AP/lib/ld-linux-armhf.so.3" ]; then
+    if ! pidof dbus-daemon >/dev/null 2>&1; then
+      rm -f /run/dbus/pid 2>/dev/null || true
+      "$AP/lib/ld-linux-armhf.so.3" --library-path "$AP/lib" "$AP/bin/dbus-daemon" \
+        --config-file=/tmp/kuyase-bus.conf --fork >/tmp/dbus.log 2>&1 || true
+    fi
+  fi
+elif [ -x /usr/bin/dbus-daemon ]; then
+  if ! pidof dbus-daemon >/dev/null 2>&1; then
+    rm -f /run/dbus/pid 2>/dev/null || true
+    dbus-daemon --system --fork >/tmp/dbus.log 2>&1 || \
+      dbus-daemon --config-file=/tmp/kuyase-bus.conf --fork >/tmp/dbus.log 2>&1 || true
+  fi
+fi
+
+# 9. Start Virtual Speaker Twin & Hardware Bridge (:8091) and register D-Bus org.bluez/org.bluealsa stub
 # In Stub Mode, bind-mount `qemu-hw-bridge` over `/system/vendor/quasar/quasar_launcher2`
 # so unmodified `/system/vendor/quasar/q` (`start`, `stop`, `restart`, `backend-dev`, `backend-prod`)
 # manages the lightweight supervisor stub without launching the conflicting `maind` monolith.
@@ -861,6 +950,13 @@ set -m
 /usr/local/bin/qemu-hw-bridge </dev/null >/tmp/hw-bridge.log 2>&1 &
 set +m
 sleep 0.4
+
+# 10. Start native Quasar maind stack when maind_mode=full (after D-Bus and org.bluez stub are active)
+if [ "$MODE" = "full" ] && [ -x /system/vendor/quasar/onboot.sh ]; then
+  echo "=== Starting native Quasar maind stack (/system/vendor/quasar/onboot.sh start) ==="
+  /system/vendor/quasar/onboot.sh start >/tmp/quasar-onboot.log 2>&1 &
+  sleep 0.4
+fi
 
 # 11. Run any user-installed /etc/init.d/S99* startup scripts (skipping firmware S99onboot.sh / S99zdropbear)
 for s in /etc/init.d/S99*; do
@@ -875,58 +971,6 @@ for s in /etc/init.d/S99*; do
     "$s" start >/tmp/init-user.log 2>&1 &
   fi
 done
-
-mkdir -p /run/avahi 2>/dev/null || true
-chown 86:86 /run/avahi 2>/dev/null || true
-
-# AirPlay on Midi/Station 3 needs the packaged Avahi D-Bus policy on disk.
-case "$BOARD" in
-  cucumber|orion)
-    AP_POLICY=$(ls /data/yam/pkgs/station/airplay/*/share/luna/plugins/station.airplay/config/avahi-dbus.conf 2>/dev/null | head -n 1 || true)
-    if [ -n "$AP_POLICY" ]; then
-      mkdir -p /etc/dbus-1/system.d
-      cp -f "$AP_POLICY" /etc/dbus-1/system.d/avahi-dbus.conf 2>/dev/null || true
-    fi
-    ;;
-esac
-
-if [ "$BOARD" = "cucumber" ] && [ -x /usr/bin/dbus-daemon ]; then
-  mkdir -p /run/dbus /usr/local/var/run
-  chown 85:85 /run/dbus 2>/dev/null || true
-  ln -sfn /run/dbus /usr/local/var/run/dbus 2>/dev/null || true
-  if ! pidof dbus-daemon >/dev/null 2>&1; then
-    dbus-daemon --system --fork >/tmp/dbus.log 2>&1 || true
-  fi
-fi
-
-# Station 3: the firmware dbus build faults on this kernel, so start the
-# packaged ARMhf dbus-daemon from the installed AirPlay package instead.
-if [ "$BOARD" = "orion" ]; then
-  AP=$(ls -d /data/yam/pkgs/station/airplay/*/share/luna/plugins/station.airplay 2>/dev/null | head -n 1 || true)
-  if [ -n "$AP" ] && [ -x "$AP/bin/dbus-daemon" ] && [ -x "$AP/lib/ld-linux-armhf.so.3" ]; then
-    mkdir -p /run/dbus /usr/local/var/run
-    chown 85:85 /run/dbus 2>/dev/null || true
-    ln -sfn /run/dbus /usr/local/var/run/dbus 2>/dev/null || true
-    cat > /tmp/kuyase-bus.conf << 'BUSEOF'
-<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
-<busconfig>
-  <type>system</type>
-  <listen>unix:path=/run/dbus/system_bus_socket</listen>
-  <auth>EXTERNAL</auth>
-  <policy context="default">
-    <allow user="*"/>
-    <allow own="*"/>
-    <allow send_destination="*"/>
-    <allow receive_sender="*"/>
-  </policy>
-</busconfig>
-BUSEOF
-    if ! pidof dbus-daemon >/dev/null 2>&1; then
-      "$AP/lib/ld-linux-armhf.so.3" --library-path "$AP/lib" "$AP/bin/dbus-daemon" \
-        --config-file=/tmp/kuyase-bus.conf --fork >/tmp/dbus.log 2>&1 || true
-    fi
-  fi
-fi
 
 echo "=== [Quasar QEMU Emulator] READY: ADB (:5555), Twin (:8091) ==="
 
