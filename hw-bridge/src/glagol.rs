@@ -587,9 +587,9 @@ fn sha1_digest(data: &[u8]) -> [u8; 20] {
 
     for chunk in padded.chunks_exact(64) {
         let mut w = [0u32; 80];
-        for i in 0..16 {
+        for (i, word) in w.iter_mut().enumerate().take(16) {
             let off = i * 4;
-            w[i] = u32::from_be_bytes([chunk[off], chunk[off + 1], chunk[off + 2], chunk[off + 3]]);
+            *word = u32::from_be_bytes([chunk[off], chunk[off + 1], chunk[off + 2], chunk[off + 3]]);
         }
         for i in 16..80 {
             w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);

@@ -334,7 +334,7 @@ pub struct EmptyMessage;
 impl EmptyMessage {
     pub fn encode(&self, _buf: &mut Vec<u8>) {}
 
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(self) -> Vec<u8> {
         Vec::new()
     }
 

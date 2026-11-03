@@ -258,18 +258,14 @@ pub fn ensure_alsa_compat_lib() {
                 ),
             ] {
                 if Path::new(target).is_file() {
-                    if !Path::new(ram_copy).is_file() {
-                        if fs::copy(target, ram_copy).is_ok() {
-                            #[cfg(unix)]
-                            {
-                                use std::os::unix::fs::PermissionsExt;
-                                let _ = fs::set_permissions(
-                                    ram_copy,
-                                    fs::Permissions::from_mode(0o755),
-                                );
-                            }
-                            let _ = strip_elf32_alsa_verneed_in_place(Path::new(ram_copy));
+                    if !Path::new(ram_copy).is_file() && fs::copy(target, ram_copy).is_ok() {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ =
+                                fs::set_permissions(ram_copy, fs::Permissions::from_mode(0o755));
                         }
+                        let _ = strip_elf32_alsa_verneed_in_place(Path::new(ram_copy));
                     }
                     let _ = crate::runtime_env::bind_mount_file(ram_copy, target);
                 }
@@ -391,9 +387,9 @@ fn usr_libasound_lacks_verdef(path: &Path) -> bool {
 ///    rewrites matching 16-bit entries in `.gnu.version` (`DT_VERSYM`) to `1` (`VER_NDX_GLOBAL`).
 /// 3. Advances `DT_VERNEED` (`0x6ffffffe`) by `vn_next` and decrements `DT_VERNEEDNUM`
 ///    (`0x6fffffff`) by `1` in `.dynamic` (and updates the `.gnu.version_r` section header).
-/// Because all `vn_aux` and `vn_next` offsets in `Elf32_Verneed` are self-relative, the remaining
-/// `Verneed` entries (`libdl.so.2`, `librt.so.1`, `libpthread.so.0`, `libc.so.6`, `libm.so.6`)
-/// stay intact while only ~2 KB of metadata is written in-place via `Seek` + `write_all`.
+///    Because all `vn_aux` and `vn_next` offsets in `Elf32_Verneed` are self-relative, the remaining
+///    `Verneed` entries (`libdl.so.2`, `librt.so.1`, `libpthread.so.0`, `libc.so.6`, `libm.so.6`)
+///    stay intact while only ~2 KB of metadata is written in-place via `Seek` + `write_all`.
 pub fn strip_elf32_alsa_verneed_in_place(path: &Path) -> bool {
     let Ok(mut file) = fs::OpenOptions::new().read(true).write(true).open(path) else {
         return false;

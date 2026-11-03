@@ -36,6 +36,8 @@
 //!    prior to `/system/vendor/quasar/onboot.sh` satisfies all synchronous `sdbus-c++` startup calls
 //!    (`GetManagedObjects`, `GetPCMs`, `GetAll`, `Get`, `Introspect`, `RegisterAgent`, etc.).
 
+#![cfg_attr(not(unix), allow(dead_code))]
+
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -107,7 +109,7 @@ fn align_up(pos: usize, align: usize) -> usize {
 }
 
 fn pad_vec_to(buf: &mut Vec<u8>, align: usize) {
-    while buf.len() % align != 0 {
+    while !buf.len().is_multiple_of(align) {
         buf.push(0);
     }
 }

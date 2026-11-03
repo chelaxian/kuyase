@@ -46,7 +46,7 @@ extern "C" {
 #[cfg(target_os = "linux")]
 extern "C" fn on_launcher_sigterm(_sig: i32) {
     unsafe {
-        let _ = unlink(b"/tmp/loop_capture_pcm\0".as_ptr());
+        let _ = unlink(c"/tmp/loop_capture_pcm".as_ptr().cast());
         _exit(0);
     }
 }
@@ -748,8 +748,8 @@ pub fn ensure_unified_var_run_under(root: &Path) {
     #[cfg(target_os = "linux")]
     if root == Path::new("/") {
         unsafe {
-            let _ = chown(b"/run/dbus\0".as_ptr(), 85, 85);
-            let _ = chown(b"/run/avahi\0".as_ptr(), 86, 86);
+            let _ = chown(c"/run/dbus".as_ptr().cast(), 85, 85);
+            let _ = chown(c"/run/avahi".as_ptr().cast(), 86, 86);
         }
     }
 
@@ -846,6 +846,7 @@ pub fn ensure_dbus_launch_helper_permissions_under(root: &Path) {
     if !helper.exists() {
         return;
     }
+    let _ = &helper;
 
     #[cfg(target_os = "linux")]
     if let Some(path_str) = helper.to_str() {

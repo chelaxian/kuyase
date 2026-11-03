@@ -139,7 +139,7 @@ mod i2c_sn3236 {
         let chip_enabled = (reg_data[0x00] & 0x01) != 0;
         let mut ring = [[0u8; 3]; 6];
         let mut any_ch_disabled = false;
-        for i in 0..6 {
+        for (i, item) in ring.iter_mut().enumerate() {
             let ch = i * 3;
             let (b, b_en) = scale_channel(latched.pwm[ch], latched.ctrl[ch], chip_enabled);
             let (g, g_en) = scale_channel(latched.pwm[ch + 1], latched.ctrl[ch + 1], chip_enabled);
@@ -147,7 +147,7 @@ mod i2c_sn3236 {
             if !b_en || !g_en || !r_en {
                 any_ch_disabled = true;
             }
-            ring[i] = [r, g, b];
+            *item = [r, g, b];
         }
         let stealth = !chip_enabled || any_ch_disabled;
         Some((ring, stealth))
