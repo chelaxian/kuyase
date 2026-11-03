@@ -1,6 +1,7 @@
 mod audio;
 mod bridge_server;
 mod devices;
+mod glagol;
 mod input;
 mod ipc;
 mod leds;
@@ -83,7 +84,7 @@ fn main() {
 
     if state.full_mode {
         state.log(
-            "Mode: Full (quasar.mode=full) — yielding IPC (:9850/:9875/:9903) to native firmware daemons (/system/vendor/quasar/onboot.sh)"
+            "Mode: Full (quasar.mode=full) — yielding IPC (:9850/:9875/:9899/:9903) to native firmware daemons (/system/vendor/quasar/onboot.sh)"
                 .to_string(),
         );
     } else {
@@ -94,6 +95,8 @@ fn main() {
         ipc::spawn_yio_audio_server(state.clone());
         ipc::spawn_aliced_ipc_server(state.clone());
         ipc::spawn_iohub_services_ipc_server(state.clone());
+        ipc::spawn_glagold_ipc_server(state.clone());
+        glagol::spawn_glagol_external_server(state.clone());
     }
     leds::spawn_native_led_animator(state.clone());
     audio::spawn_alsa_loopback_capture(state.clone());
