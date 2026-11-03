@@ -198,6 +198,9 @@ pub struct BridgeState {
     pub temp_milli_c: AtomicU32,
     pub speaker_rms: AtomicU32,
     pub mic_burst_active: AtomicBool,
+    pub player_playing: AtomicBool,
+    pub player_track_index: AtomicU32,
+    pub ipc_wire_format: AtomicU32,
     pub tof_uinput: Mutex<Option<File>>,
     #[allow(dead_code)]
     pub jack_uinput: Mutex<Option<File>>,
@@ -231,6 +234,10 @@ impl BridgeState {
         let full_mode = fs::read_to_string("/proc/cmdline")
             .map(|c| c.split_whitespace().any(|t| t == "quasar.mode=full"))
             .unwrap_or(false);
+        let default_wf = match crate::proto::quasar_root::QuasarWireFormat::detect_from_firmware() {
+            crate::proto::quasar_root::QuasarWireFormat::LegacyDirect => 0,
+            crate::proto::quasar_root::QuasarWireFormat::Envelope252 => 1,
+        };
         Self {
             board_slug: profile.board_slug,
             board_name: profile.board_name,
@@ -250,6 +257,9 @@ impl BridgeState {
             temp_milli_c: AtomicU32::new(40000),
             speaker_rms: AtomicU32::new(0),
             mic_burst_active: AtomicBool::new(false),
+            player_playing: AtomicBool::new(false),
+            player_track_index: AtomicU32::new(1),
+            ipc_wire_format: AtomicU32::new(default_wf),
             tof_uinput: Mutex::new(tof_uinput),
             jack_uinput: Mutex::new(jack_uinput),
             key_uinput: Mutex::new(key_uinput),
@@ -287,6 +297,96 @@ impl BridgeState {
 
     pub fn set_alice_state(&self, st: AliceState) {
         self.alice_state.store(st as u32, Ordering::SeqCst);
+    }
+
+    pub fn wire_format(&self) -> crate::proto::quasar_root::QuasarWireFormat {
+        match self.ipc_wire_format.load(Ordering::Relaxed) {
+            1 => crate::proto::quasar_root::QuasarWireFormat::Envelope252,
+            _ => crate::proto::quasar_root::QuasarWireFormat::LegacyDirect,
+        }
+    }
+
+    pub fn set_wire_format(&self, wf: crate::proto::quasar_root::QuasarWireFormat) {
+        let code = match wf {
+            crate::proto::quasar_root::QuasarWireFormat::LegacyDirect => 0,
+            crate::proto::quasar_root::QuasarWireFormat::Envelope252 => 1,
+        };
+        self.ipc_wire_format.store(code, Ordering::Relaxed);
+    }
+
+    pub fn set_mics_muted(&self, muted: bool) {
+        self.mics_muted.store(muted, Ordering::SeqCst);
+        self.mic_rms
+            .store(if muted { 0 } else { 60 }, Ordering::SeqCst);
+        self.peripherals
+            .audio_hw
+            .on_volume_or_mute_changed(self.volume_level.load(Ordering::Relaxed), muted);
+        self.append_maind_log(&format!("[sdk] onMicsMutedChanged: muted={}", muted));
+        crate::leds::sync_immediate_led_state(self);
+    }
+
+    pub fn handle_playback_control(&self, method_id: u64) {
+        match method_id {
+            0 => {
+                self.player_playing.store(true, Ordering::SeqCst);
+                self.append_maind_log("[sdk] PlaybackControlCapability: PLAY (playing=true)");
+                self.log("IPC :9875 -> PlaybackControlCapabilityMethod PLAY (0)");
+            }
+            1 => {
+                self.player_playing.store(false, Ordering::SeqCst);
+                self.append_maind_log("[sdk] PlaybackControlCapability: PAUSE (playing=false)");
+                self.log("IPC :9875 -> PlaybackControlCapabilityMethod PAUSE (1)");
+            }
+            2 => {
+                let prev = self.player_playing.fetch_xor(true, Ordering::SeqCst);
+                let now_playing = !prev;
+                self.append_maind_log(&format!(
+                    "[sdk] PlaybackControlCapability: TOGGLE_PLAY_PAUSE (playing={})",
+                    now_playing
+                ));
+                self.log(format!(
+                    "IPC :9875 -> PlaybackControlCapabilityMethod TOGGLE_PLAY_PAUSE (2, playing={})",
+                    now_playing
+                ));
+            }
+            6 => {
+                let track = self
+                    .player_track_index
+                    .fetch_add(1, Ordering::SeqCst)
+                    .wrapping_add(1);
+                self.append_maind_log(&format!(
+                    "[sdk] PlaybackControlCapability: NEXT (track={})",
+                    track
+                ));
+                self.log(format!(
+                    "IPC :9875 -> PlaybackControlCapabilityMethod NEXT (6, track={})",
+                    track
+                ));
+            }
+            7 => {
+                let cur = self.player_track_index.load(Ordering::SeqCst);
+                let prev_track = cur.saturating_sub(1).max(1);
+                self.player_track_index.store(prev_track, Ordering::SeqCst);
+                self.append_maind_log(&format!(
+                    "[sdk] PlaybackControlCapability: PREV (track={})",
+                    prev_track
+                ));
+                self.log(format!(
+                    "IPC :9875 -> PlaybackControlCapabilityMethod PREV (7, track={})",
+                    prev_track
+                ));
+            }
+            other => {
+                self.append_maind_log(&format!(
+                    "[sdk] PlaybackControlCapability: method={}",
+                    other
+                ));
+                self.log(format!(
+                    "IPC :9875 -> PlaybackControlCapabilityMethod ({})",
+                    other
+                ));
+            }
+        }
     }
 
     pub fn set_volume_level(&self, level: u32) {
