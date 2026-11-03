@@ -1,3 +1,12 @@
+pub mod boards;
+pub mod display;
+
+pub use boards::{
+    board_display_label, board_has_matrix_21x12, board_has_segment_clock, default_board_ring_leds,
+    detect_board_hint_from_filename, detect_board_hint_from_path, detect_board_slug_from_probe,
+    find_board_descriptor, normalize_board_slug, BoardDescriptor, BOARD_CATALOG, BOARD_LABELS,
+};
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -299,25 +308,6 @@ pub fn build_wav_bytes(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
     out.extend_from_slice(&data_len.to_le_bytes());
     out.extend_from_slice(pcm);
     out
-}
-
-pub fn normalize_board_slug(raw: &str) -> String {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "station-lite" | "lite" | "lite1" | "micro" | "yandexmicro" => "yandexmicro".to_string(),
-        "mini" | "mini1" | "yandexmini" => "yandexmini".to_string(),
-        "mini2" | "yandexmini_2" | "yandexmini2" => "yandexmini2".to_string(),
-        "mini2nc" | "yandexmini_2_nc" | "yandexmini2nc" => "yandexmini2nc".to_string(),
-        "mini3" | "yandexmini_3" | "yandexmini3" | "bergamot" => "bergamot".to_string(),
-        "mini3pro" | "pickle" => "pickle".to_string(),
-        "lite2" | "plum" => "plum".to_string(),
-        "prune" | "lite2nc" | "plumnc" => "plumnc".to_string(),
-        "midi" | "cucumber" => "cucumber".to_string(),
-        "station3" | "orion" => "orion".to_string(),
-        "station_2" | "station-midi" | "yandexmidi" | "station2" => "station2".to_string(),
-        "street" | "mango" => "mango".to_string(),
-        "hub" | "saturn" => "saturn".to_string(),
-        other => other.to_string(),
-    }
 }
 
 #[cfg(test)]
