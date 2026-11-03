@@ -297,9 +297,9 @@ fn run_quasar_launcher2_stub() -> ! {
     // (`mkfifo /tmp/loop_capture_pcm`) so subsequent `q start` / `q restart` invocations
     // never print `mkfifo: /tmp/loop_capture_pcm: File exists`.
     let _ = fs::remove_file(LOOP_CAPTURE_FIFO);
+    detach_stdio_and_extra_fds();
     ensure_idle_stubs_running();
     notify_launcher2_start_to_bridge();
-    detach_stdio_and_extra_fds();
     loop {
         ensure_idle_stubs_running();
         thread::sleep(Duration::from_millis(250));
