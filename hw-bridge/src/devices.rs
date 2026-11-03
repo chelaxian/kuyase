@@ -572,7 +572,18 @@ impl AuxLightDevice for LogoSysfsFbDevice {
             return out;
         }
         if let Ok(raw) = fs::read("/dev/fb1") {
-            if raw.len() >= self.count * 3 && raw[..self.count * 3].iter().any(|&b| b > 0) {
+            if raw.len() == self.count * 4 && raw.iter().any(|&b| b > 0) {
+                for i in 0..self.count {
+                    let base = i * 4;
+                    let w = raw[base + 3] / 2;
+                    out[i] = [
+                        raw[base].saturating_add(w),
+                        raw[base + 1].saturating_add(w),
+                        raw[base + 2].saturating_add(w),
+                    ];
+                }
+                return out;
+            } else if raw.len() >= self.count * 3 && raw[..self.count * 3].iter().any(|&b| b > 0) {
                 for i in 0..self.count {
                     let base = i * 3;
                     out[i] = [raw[base], raw[base + 1], raw[base + 2]];
@@ -1721,7 +1732,9 @@ impl BoardPeripherals {
         } else {
             let (fallback_fb, drv_label) = match slug {
                 "orion" => ("/dev/fb2".to_string(), "framebuffer"),
-                "cucumber" | "station2" | "bergamot" => ("/dev/fb0".to_string(), "framebuffer"),
+                "cucumber" | "station2" | "bergamot" | "mango" => {
+                    ("/dev/fb0".to_string(), "framebuffer")
+                }
                 _ => ("/dev/fb0".to_string(), "sysfs"),
             };
             Box::new(SysfsFbLedRing {

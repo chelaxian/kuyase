@@ -124,6 +124,8 @@ if [ "$BOARD" = "auto" ] || [ -z "$BOARD" ]; then
     "")
       if [ -e /lib/firmware/bergamot-acm8625.cfg ]; then
         BOARD="bergamot"
+      elif [ -e /lib/firmware/mango-acm8625.cfg ]; then
+        BOARD="mango"
       elif [ -e /etc/init.d/S61leds_brightness ]; then
         BOARD="yandexmini2"
       elif [ -e /boot/yandex-cucumber-i2ctop-overlay.dtb ]; then
@@ -306,7 +308,7 @@ case "$BOARD" in
     printf "Yandex Station Mango DVT\0" > /tmp/fake-dt/model
     printf "yandex,mango\0amlogic,a1\0" > /tmp/fake-dt/compatible
     BOARD_NAME="Яндекс Станция Стрит (mango)"
-    SYSFS_PREFIX="mango"; RING_LEDS=4; LOGO_LEDS=3; AMBILIGHT_LEDS=0; HAS_CLOCK="false"; LED_DRIVER="sysfs"
+    SYSFS_PREFIX="mango"; RING_START=1; RING_LEDS=4; LOGO_LEDS=3; AMBILIGHT_LEDS=0; HAS_CLOCK="false"; LED_DRIVER="framebuffer"
     ;;
   saturn)
     printf "Yandex Saturn\0" > /tmp/fake-dt/model
@@ -405,6 +407,11 @@ else
       ;;
     bergamot)
       write_fb_geom fb0 6 1 24
+      ;;
+    mango)
+      echo "logo" > /sys/class/graphics/fb1/name
+      write_fb_geom fb0 4 1 24
+      write_fb_geom fb1 3 1 24
       ;;
   esac
   echo 255 > /sys/class/backlight/fb0/brightness
@@ -606,6 +613,41 @@ elif [ "$BOARD" = "bergamot" ]; then
   echo 12000 > /sys/class/power_supply/ya_pd/voltage_now
   echo 1500 > /sys/class/power_supply/ya_pd/current_now
   echo '[{"name":"main","assembly":"00000000001"}]' > /sys/devices/platform/pcba_ids/pcba_ids_drv/pcba_ids
+elif [ "$BOARD" = "mango" ]; then
+  mkdir -p /sys/bus/i2c/devices/2-002c
+  echo "acm8625s" > /sys/bus/i2c/devices/2-002c/name
+  echo "mango-acm8625.cfg" > /sys/bus/i2c/devices/2-002c/settings_file
+  echo "mango-acm8625.cfg" > /sys/bus/i2c/devices/2-002c/default_settings
+  ln -sfn /sys/bus/i2c/devices/2-002c/settings_file /tmp/amp_settings_file
+  ln -sfn /sys/bus/i2c/devices/2-002c/default_settings /tmp/amp_default_settings
+  mkdir -p /sys/devices/virtual/cw2217_cls/cw2217_coulomb \
+           /sys/devices/virtual/ip2366_cls/ip2366_charger \
+           /sys/class/power_supply/battery \
+           /sys/devices/platform/charge-animation \
+           /sys/devices/platform/logo-animation \
+           /sys/devices/platform/pcba_ids/pcba_ids_drv
+  echo 85 > /sys/devices/virtual/cw2217_cls/cw2217_coulomb/capacity
+  echo 7800 > /sys/devices/virtual/cw2217_cls/cw2217_coulomb/battery_vol
+  echo 500 > /sys/devices/virtual/cw2217_cls/cw2217_coulomb/battery_current
+  echo 280 > /sys/devices/virtual/cw2217_cls/cw2217_coulomb/battery_temp
+  echo 100 > /sys/devices/virtual/cw2217_cls/cw2217_coulomb/soh
+  echo 12 > /sys/devices/virtual/cw2217_cls/cw2217_coulomb/cycle
+  echo 1 > /sys/devices/virtual/ip2366_cls/ip2366_charger/charge_status
+  echo 1 > /sys/devices/virtual/ip2366_cls/ip2366_charger/is_pd
+  echo 12000 > /sys/devices/virtual/ip2366_cls/ip2366_charger/charge_voltage
+  echo "PD" > /sys/devices/virtual/ip2366_cls/ip2366_charger/pd_protocol
+  echo 1 > /sys/devices/virtual/ip2366_cls/ip2366_charger/switch_charge
+  echo "Battery" > /sys/class/power_supply/battery/type
+  echo "Charging" > /sys/class/power_supply/battery/status
+  echo 1 > /sys/class/power_supply/battery/present
+  echo 85 > /sys/class/power_supply/battery/capacity
+  echo 7800000 > /sys/class/power_supply/battery/voltage_now
+  echo 500000 > /sys/class/power_supply/battery/current_now
+  echo 280 > /sys/class/power_supply/battery/temp
+  echo "Good" > /sys/class/power_supply/battery/health
+  echo 0 > /sys/devices/platform/charge-animation/stop
+  echo 0 > /sys/devices/platform/logo-animation/stop
+  echo '[{"name":"main","assembly":"1"},{"name":"third_mic_board","assembly":"1"}]' > /sys/devices/platform/pcba_ids/pcba_ids_drv/pcba_ids
 fi
 
 # 8. Configure ALSA (/etc/asound.conf & /tmp/alsa/alsa.conf) for snd-aloop (card 0: Loopback)
@@ -760,7 +802,7 @@ for s in /etc/init.d/S99*; do
   [ -e "$s" ] || continue
   bname=$(basename "$s")
   case "$bname" in
-    S99onboot.sh|S99quasar*|S99zdropbear|S99dropbear*|S99adbd*)
+    S99onboot.sh|S99quasar*|S99zdropbear|S99dropbear*|S99*ssh*|S99*alicebridge*|S99adbd*)
       continue
       ;;
   esac

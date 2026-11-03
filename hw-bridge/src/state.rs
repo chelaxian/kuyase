@@ -98,6 +98,11 @@ impl BoardProfile {
                 || Path::new("/lib/firmware/bergamot-acm8625.cfg").exists()
             {
                 "bergamot".to_string()
+            } else if Path::new("/sys/class/leds/mango:red:ring0").exists()
+                || Path::new("/sys/class/leds/mango:red:ring1").exists()
+                || Path::new("/lib/firmware/mango-acm8625.cfg").exists()
+            {
+                "mango".to_string()
             } else if Path::new("/sys/class/leds/mini2:red:ring0").exists()
                 || Path::new("/sys/class/leds/mini2:red:ring1").exists()
                 || Path::new("/etc/init.d/S61leds_brightness").exists()
