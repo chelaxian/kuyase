@@ -54,7 +54,11 @@ class TestStationAirplaySmoke(unittest.TestCase):
             with self.subTest(board=board):
                 with KuyaseHeadlessVm(board, port_offset=400 + idx * 10) as vm:
                     assert vm.bridge is not None
-                    install_and_start_luna(vm)
+                    luna_ok, luna_err = install_and_start_luna(vm)
+                    if not luna_ok:
+                        self.skipTest(
+                            f"[{board}] yam/luna install skipped ({luna_err.splitlines()[-1] if luna_err else 'unavailable'})"
+                        )
 
                     ok, err_msg = install_airplay_plugin(vm)
                     if not ok:

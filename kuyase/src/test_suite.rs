@@ -537,6 +537,35 @@ pub fn run_board_verification(
             );
         }
 
+        if board == "mango" {
+            let mango_out = adb.shell(
+                "cat /sys/bus/i2c/devices/2-002c/settings_file; \
+                 cat /sys/devices/virtual/cw2217_cls/cw2217_coulomb/capacity; \
+                 cat /sys/devices/virtual/ip2366_cls/ip2366_charger/is_pd; \
+                 cat /sys/class/power_supply/battery/status",
+                Duration::from_secs(8),
+            )?;
+            let lines: Vec<&str> = mango_out
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .collect();
+            if lines.first().copied() != Some("mango-acm8625.cfg")
+                || lines.get(1).copied() != Some("85")
+                || lines.get(2).copied() != Some("1")
+                || lines.get(3).copied() != Some("Charging")
+            {
+                return Err(format!(
+                    "[{}] Unexpected mango ACM8625S / CW2217 / IP2366 sysfs state: {:?}",
+                    board, lines
+                ));
+            }
+            println!(
+                "[{}] Mango ACM8625S (mango-acm8625.cfg), CW2217 battery (85%) & IP2366 PD charger verified!",
+                board
+            );
+        }
+
         if board == "orion" {
             // Wait for 1.5s volume overlay to expire
             thread::sleep(Duration::from_millis(1550));

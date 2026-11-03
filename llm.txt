@@ -50,12 +50,13 @@
 - `yandexmicro` (Станция Лайт, `YNDX-00025`, 32-bit `armhf`): 3-LED ring (`micro:*:ring1..3`), 4 mics.
 - `plum` (Станция Лайт 2 с часами, `yandex,plum`, 32-bit `armhf`): 3-LED ring (`plum:*:ring1..3`), 7-segment clock (`plum:white:clock*`), `LTR-308` ALS, 2 mics.
 - `plumnc` (Станция Лайт 2 без часов, `yandex,prune`, 32-bit `armhf`): 3-LED ring (`plum:*:ring1..3`), `LTR-308` ALS, 2 mics.
+- `mango` (Станция Стрит, `yandex,mango`, 32-bit `armhf`): 4-LED battery indicator (`/dev/fb0` or `mango:*:ring1..4`, `AW9110`, `ledpatterns/battery/*.led`), 3-LED RGBW logo `oknix` (`/dev/fb1` or `mango:*:logo0..2`, `AW21012`, `ledpatterns/oknix/*.led`), `ACM8625S` Class-D amplifier (`2-002c`, `mango-acm8625.cfg` / `mango-acm8625-outside.cfg`), `CW2217` battery fuel gauge & `IP2366` USB-C PD charger, `SC7A20TR` accelerometer, 2 mics.
 - `station2` (Станция 2, `YNDX-00051` / `yandex,station-midi`, 32-bit `armhf`): 88-LED RGBW panel (`/dev/fb0` or `station2:*:ring0..87`), `LTR-308` ALS, 4 mics.
 - `cucumber` (Станция Миди, `YNDX-00054`, 64-bit `aarch64`): 24-LED ring (`/dev/fb0` or `cucumber:*:ring0..23`), 6-LED logo (`/dev/fb1` or `cucumber:*:logo0..5`), 7-segment clock (`cucumber:white:clock-*`), `LTR-308` ALS, 4 mics.
 - `orion` (Станция 3, `YNDX-00055`, 64-bit `aarch64`): 36-LED ring (`/dev/fb2` `name="ring"` or `orion:*:ring0..35` + `orion:ring{A,B,C}:sync`), 12×2 RGBW ambilight (`/dev/fb0` `name="ambilight"`, `12×1` `48 bpp` + 96 sysfs channels `orion:{red,green,blue,white}:ambilight{0..11}{a,b}` + `orion:ambilight{A,B,C}:sync`), `21x12` monochrome LED matrix display (`/dev/fb1` `name="YNDX LED screen"`, `252` pixels, `756` bytes `24 bpp`, `gowin_led_device.ko`), 4× `ACM8625S` Class-D amplifiers (`3-002d` `woofer`, `3-002e` `lr`, `3-002c` `center`, `2-002c` `us`), separate Ultrasound TDM-A (`hw:0,0` / `pcm.ultrasound`, `96 kHz` sample rate, `38.4 kHz` carrier), `light-sensor-top` (`LTR-308`) ALS, USB-C PD (`husb238_pd` `20V`), 6 mics.
 
 ### Auto-Profiled (Untested)
-- `pickle` (Станция Мини 3 Про, `aarch64`), `mango` (Станция Стрит, `armhf`), `saturn` (Умный хаб Яндекса, `armhf`).
+- `pickle` (Станция Мини 3 Про, `aarch64`), `saturn` (Умный хаб Яндекса, `armhf`).
 
 ### Unsupported Devices
 - Android / YaOS devices (`tulip-d1` Станция 1, `yandexstation_2` Станция Макс / Макс с Zigbee, Станция Дуо Макс, ТВ Станции) are not supported.

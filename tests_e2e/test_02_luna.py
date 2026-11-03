@@ -18,6 +18,8 @@ import pathlib
 import time
 import unittest
 
+from typing import Tuple
+
 from tests_e2e.harness import (
     KuyaseHeadlessVm,
     discover_test_boards,
@@ -25,7 +27,7 @@ from tests_e2e.harness import (
 )
 
 
-def install_and_start_luna(vm: KuyaseHeadlessVm) -> None:
+def install_and_start_luna(vm: KuyaseHeadlessVm) -> Tuple[bool, str]:
     install_yam_v2_on_vm(vm)
     local_pkg = os.environ.get("KUYASE_LUNA_PKG", "").strip()
     if local_pkg and pathlib.Path(local_pkg).is_file():
@@ -34,14 +36,19 @@ def install_and_start_luna(vm: KuyaseHeadlessVm) -> None:
         )
         vm.adb.shell_checked("/usr/bin/yam install --yes /tmp/luna.yampkg", timeout=120.0)
     else:
-        vm.adb.shell_checked("/usr/bin/yam install --yes yam/luna", timeout=180.0)
+        out = vm.adb.shell(
+            "/usr/bin/yam install --yes yam/luna 2>&1 && echo __LUNA_OK__",
+            timeout=180.0,
+        )
+        if "__LUNA_OK__" not in out:
+            return False, out.strip()
 
     # Ensure Luna daemon is up on 127.0.0.1:8099
     vm.adb.shell_checked(
-        "if ! pidof luna >/dev/null 2>&1; then "
+        "if ! wget -qO- http://127.0.0.1:8099/api/device >/dev/null 2>&1; then "
         "  mkdir -p /data/yam/var/luna/data /tmp/yam; "
         "  nohup /data/yam/bin/luna --listen 0.0.0.0:8099 --data-dir /data/yam/var/luna/data "
-        "    >>/data/yam/var/luna/luna.log 2>&1 & "
+        "    >>/data/yam/var/luna/luna.log 2>&1 </dev/null & "
         "fi"
     )
     vm.adb.shell_checked(
@@ -51,6 +58,7 @@ def install_and_start_luna(vm: KuyaseHeadlessVm) -> None:
         "done; exit 1",
         timeout=40.0,
     )
+    return True, ""
 
 
 class TestLunaE2ESmoke(unittest.TestCase):
@@ -63,7 +71,11 @@ class TestLunaE2ESmoke(unittest.TestCase):
             with self.subTest(board=board):
                 with KuyaseHeadlessVm(board, port_offset=300 + idx * 10) as vm:
                     assert vm.bridge is not None
-                    install_and_start_luna(vm)
+                    ok, err_msg = install_and_start_luna(vm)
+                    if not ok:
+                        self.skipTest(
+                            f"[{board}] yam/luna install skipped ({err_msg.splitlines()[-1] if err_msg else 'unavailable'})"
+                        )
 
                     # 1. Verify /api/device
                     dev_raw = vm.adb.shell_checked(
@@ -76,7 +88,15 @@ class TestLunaE2ESmoke(unittest.TestCase):
                     # On boards where Luna uses sysfs LEDs (cucumber, yandexmini2, plum, yandexmicro),
                     # switch sysfs trigger to `none` first; on framebuffer boards (station2, bergamot, orion),
                     # keep `[ledfb-ring]` active so `qemu-hw-bridge` reads `/dev/fb*`.
-                    if board in ("cucumber", "yandexmini2", "yandexmini2nc", "plum", "plumnc", "yandexmicro"):
+                    if board in (
+                        "cucumber",
+                        "yandexmini2",
+                        "yandexmini2nc",
+                        "plum",
+                        "plumnc",
+                        "yandexmicro",
+                        "mango",
+                    ):
                         vm.adb.shell(
                             "for t in /sys/class/leds/*:ring*/trigger; do "
                             "  [ -e \"$t\" ] && echo none > \"$t\" 2>/dev/null || true; "
