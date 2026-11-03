@@ -4,7 +4,8 @@ E2E Smoke Test 02: Luna Runtime (`nyakokitsu/luna`) Installer (`install.sh` & `i
 Executes exclusively via `kuyase run --headless --board <board> --snapshot --exec`:
 1. Runs the unmodified `nyakokitsu/luna/install.sh` inside the guest with canonical `uname -n`
    (verifying station auto-detection without `--platform`)
-2. Verifies `nyakokitsu/luna/install.ps1` `Compact` + `Get-Aliases` station matching against `manifest.json`
+2. Executes the embedded Python manifest resolver directly from `nyakokitsu/luna/install.sh`
+   and verifies `nyakokitsu/luna/install.ps1` `Get-DetectedDtPlatform` against the guest DT
 3. Verifies `/etc/init.d/S99luna` starts `/data/quazar/luna/bin/luna` on `127.0.0.1:8099`
 4. Verifies `GET /api/device`, `POST /api/led/ring`, `POST /api/led/off`, `POST /api/clock`, and `POST /api/volume/set`
    (while `kuyase --exec` enforces `ipc_error_count == 0` and `led_trigger_conflict_count == 0`)
@@ -12,61 +13,83 @@ Executes exclusively via `kuyase run --headless --board <board> --snapshot --exe
 
 from __future__ import annotations
 
-import json
+import pathlib
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Optional, Tuple
 
 from tests_e2e.harness import (
     ADB_GUEST_SHIM,
     CANONICAL_STATION_HOSTNAME,
+    EXPECTED_YAM_PLATFORM,
     discover_test_boards,
     http_get_text,
+    load_luna_install_ps1,
     load_luna_install_sh,
     run_headless_exec,
 )
 
 
-def load_luna_release_manifest() -> Dict[str, Any]:
-    raw = http_get_text(
-        "https://github.com/nyakokitsu/luna/releases/latest/download/manifest.json"
-    )
-    return json.loads(raw)
-
-
-def _luna_compact(val: str) -> str:
-    if not val or not val.strip():
-        return ""
-    x = re.sub(r"[A-Z]{4}$", "", val.strip())
-    x = re.sub(r"[-_](?=[a-z]*[0-9])[a-z0-9]{4}$", "", x.lower())
-    return re.sub(r"[^a-z0-9]", "", x)
-
-
-def resolve_luna_manifest_device(
-    manifest: Dict[str, Any], hostname: str
+def run_install_sh_embedded_manifest_resolver(
+    install_sh: str, manifest_raw: str, target: str
 ) -> Optional[Tuple[str, str, str]]:
-    """Resolve `(device, asset, codename)` from `manifest.json` for a canonical station hostname."""
-    t_norm = _luna_compact(hostname)
-    devices: List[Dict[str, Any]] = manifest.get("devices", [])
+    """Run the exact embedded `python3 - ... <<'PY'` script from `luna/install.sh`."""
+    m = re.search(
+        r"python3\s+-\s+[^\n]*<<'PY'\n(.*?)\nPY",
+        install_sh,
+        re.DOTALL,
+    )
+    if not m:
+        raise RuntimeError("Embedded Python manifest resolver not found in luna/install.sh")
+    embedded_py = m.group(1)
 
-    def aliases(entry: Dict[str, Any]) -> List[str]:
-        names = list(entry.get("models", [])) + [
-            entry.get("device", ""),
-            entry.get("codename", ""),
-        ]
-        return [_luna_compact(str(n)) for n in names if n]
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", suffix=".json", delete=False
+    ) as tmp:
+        tmp.write(manifest_raw)
+        tmp_path = pathlib.Path(tmp.name)
 
-    found = [e for e in devices if t_norm in aliases(e)]
-    if not found:
-        found = [
-            e
-            for e in devices
-            if any(t_norm in a or a in t_norm for a in aliases(e))
-        ]
-    if len(found) != 1:
-        return None
-    e = found[0]
-    return (str(e["device"]), str(e["asset"]), str(e.get("codename", "")))
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", embedded_py, str(tmp_path), target, "0"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=15,
+        )
+        if proc.returncode != 0:
+            return None
+        parts = proc.stdout.rstrip("\r\n").split("\t")
+        if len(parts) < 2:
+            return None
+        device = parts[0]
+        asset = parts[1]
+        codename = parts[2] if len(parts) > 2 else ""
+        return (device, asset, codename)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def evaluate_luna_ps1_detected_dt_platform(install_ps1: str, dt_compact: str) -> str:
+    """Evaluate `Get-DetectedDtPlatform` regex branches directly from `luna/install.ps1`."""
+    fn_match = re.search(
+        r"function\s+Get-DetectedDtPlatform[^{]*\{(.*?)\n\}",
+        install_ps1,
+        re.DOTALL,
+    )
+    if not fn_match:
+        return ""
+    for line in fn_match.group(1).splitlines():
+        m = re.search(
+            r"\$compact\s+-match\s+'([^']+)'\)\s*\{\s*return\s+\"([^\"]+)\"\s*\}",
+            line.strip(),
+        )
+        if m and re.search(m.group(1), dt_compact):
+            return m.group(2)
+    return ""
 
 
 def build_luna_install_and_api_exec_script(
@@ -78,7 +101,7 @@ def build_luna_install_and_api_exec_script(
     board: str,
 ) -> str:
     # Provide `uname` (returning canonical station hostname for `-n`) and `python3`
-    # (returning the manifest record matched by `luna/install.sh`'s embedded script)
+    # (forwarding the output of `luna/install.sh`'s own embedded Python resolver)
     # so the unmodified `nyakokitsu/luna/install.sh` runs inside the guest `/bin/sh`.
     sysfs_led_boards = (
         "cucumber",
@@ -90,7 +113,7 @@ def build_luna_install_and_api_exec_script(
         "mango",
     )
     switch_trigger = (
-        "for t in /sys/class/leds/*:ring*/trigger; do [ -e \"$t\" ] && echo none > \"$t\" 2>/dev/null || true; done"
+        'for t in /sys/class/leds/*:ring*/trigger; do [ -e "$t" ] && echo none > "$t" 2>/dev/null || true; done'
         if board in sysfs_led_boards
         else ":"
     )
@@ -115,6 +138,8 @@ def build_luna_install_and_api_exec_script(
         ")\n"
         "test -x /data/quazar/luna/bin/luna\n"
         "test -x /etc/init.d/S99luna\n"
+        "DT_COMPACT=$(cat /proc/device-tree/compatible /proc/device-tree/amlogic-dt-id 2>/dev/null | tr '\\000' '\\n' | tr -d '\\r \\t' | tr '[:upper:]' '[:lower:]')\n"
+        'printf "__LUNA_DT_COMPACT=%s\\n" "$DT_COMPACT"\n'
         "i=0\n"
         "while [ $i -lt 30 ]; do\n"
         "  if command wget -qO- http://127.0.0.1:8099/api/device >/tmp/luna-device.json 2>/dev/null; then\n"
@@ -148,11 +173,16 @@ class TestLunaInstallerAndRuntimeE2E(unittest.TestCase):
             self.skipTest("No `work/*-system.ext4` guest images found")
 
         install_sh = load_luna_install_sh()
-        manifest = load_luna_release_manifest()
+        install_ps1 = load_luna_install_ps1()
+        manifest_raw = http_get_text(
+            "https://github.com/nyakokitsu/luna/releases/latest/download/manifest.json"
+        )
 
         for idx, board in enumerate(boards):
             canonical_host = CANONICAL_STATION_HOSTNAME.get(board, board)
-            matched = resolve_luna_manifest_device(manifest, canonical_host)
+            matched = run_install_sh_embedded_manifest_resolver(
+                install_sh, manifest_raw, canonical_host
+            )
             with self.subTest(board=board):
                 if matched is None:
                     self.skipTest(
@@ -169,6 +199,14 @@ class TestLunaInstallerAndRuntimeE2E(unittest.TestCase):
                 )
                 out = run_headless_exec(board, script, port_offset=300 + idx * 10)
                 self.assertIn("__LUNA_E2E_OK__", out)
+
+                dt_match = re.search(r"__LUNA_DT_COMPACT=(\S+)", out)
+                if dt_match and "function Get-DetectedDtPlatform" in install_ps1:
+                    expected_dt_plat = EXPECTED_YAM_PLATFORM.get(board, board)
+                    ps1_dt_plat = evaluate_luna_ps1_detected_dt_platform(
+                        install_ps1, dt_match.group(1)
+                    )
+                    self.assertEqual(ps1_dt_plat, expected_dt_plat)
 
 
 if __name__ == "__main__":
