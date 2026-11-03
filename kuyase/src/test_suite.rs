@@ -549,7 +549,7 @@ fn verify_bergamot_peripherals(board: &str, adb: &AdbClient) -> Result<(), Strin
         || lines.get(1).copied() != Some("husb238_pd")
         || lines.get(2).copied() != Some("Good")
         || lines.get(3).copied() != Some("12000")
-        || lines.get(4).map(|s| s.contains(';')).unwrap_or(false) == false
+        || !lines.get(4).map(|s| s.contains(';')).unwrap_or(false)
     {
         return Err(format!(
             "[{}] Unexpected bergamot ACM8625P / HUSB238 PD / AW21036 sysfs state: {:?}",
@@ -925,30 +925,45 @@ fn verify_sensors_and_voice_tts(
     Ok(())
 }
 
+fn wait_for_serial_active_line(
+    session: &EmulatorSession,
+    attempts: usize,
+    step_ms: u64,
+    pred: impl Fn(&str) -> bool,
+) -> bool {
+    for _ in 0..attempts {
+        if pred(&session.serial_snapshot().active_line) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(step_ms));
+    }
+    pred(&session.serial_snapshot().active_line)
+}
+
+fn wait_for_serial_completed_line(
+    session: &EmulatorSession,
+    attempts: usize,
+    step_ms: u64,
+    expected: &str,
+) -> bool {
+    for _ in 0..attempts {
+        thread::sleep(Duration::from_millis(step_ms));
+        if session.serial_lines().iter().any(|l| l.trim() == expected) {
+            return true;
+        }
+    }
+    false
+}
+
 fn verify_native_serial_shell(board: &str, session: &EmulatorSession) -> Result<(), String> {
     let expected_root_prompt = format!("root@qemu-{}:/#", board);
-    let mut prompt_ready = false;
-    for _ in 0..25 {
-        let snap = session.serial_snapshot();
-        if snap.active_line.contains(&expected_root_prompt) {
-            prompt_ready = true;
-            break;
-        }
-        thread::sleep(Duration::from_millis(80));
-    }
+    let mut prompt_ready =
+        wait_for_serial_active_line(session, 25, 80, |line| line.contains(&expected_root_prompt));
     if !prompt_ready {
         session.send_serial_input("\n")?;
-        for _ in 0..15 {
-            thread::sleep(Duration::from_millis(80));
-            if session
-                .serial_snapshot()
-                .active_line
-                .contains(&expected_root_prompt)
-            {
-                prompt_ready = true;
-                break;
-            }
-        }
+        prompt_ready = wait_for_serial_active_line(session, 15, 80, |line| {
+            line.contains(&expected_root_prompt)
+        });
     }
     if !prompt_ready {
         return Err(format!(
@@ -962,19 +977,9 @@ fn verify_native_serial_shell(board: &str, session: &EmulatorSession) -> Result<
     // Verify native BusyBox ash Tab completion (`cd /sys/cl\t` -> `/sys/class/`) and live CWD prompt
     session.send_serial_input("cd /sys/cl\t")?;
     let expected_completed_line = format!("root@qemu-{}:/# cd /sys/class/", board);
-    let mut tab_completed = false;
-    for _ in 0..20 {
-        thread::sleep(Duration::from_millis(60));
-        if session
-            .serial_snapshot()
-            .active_line
-            .contains(&expected_completed_line)
-        {
-            tab_completed = true;
-            break;
-        }
-    }
-    if !tab_completed {
+    if !wait_for_serial_active_line(session, 20, 60, |line| {
+        line.contains(&expected_completed_line)
+    }) {
         return Err(format!(
             "[{}] Native /bin/sh Tab completion ('cd /sys/cl\\t') did not produce '{}', active_line='{}'",
             board,
@@ -985,19 +990,7 @@ fn verify_native_serial_shell(board: &str, session: &EmulatorSession) -> Result<
 
     session.send_serial_input("\n")?;
     let expected_sub_prompt = format!("root@qemu-{}:/sys/class#", board);
-    let mut tab_cd_ok = false;
-    for _ in 0..20 {
-        thread::sleep(Duration::from_millis(60));
-        if session
-            .serial_snapshot()
-            .active_line
-            .contains(&expected_sub_prompt)
-        {
-            tab_cd_ok = true;
-            break;
-        }
-    }
-    if !tab_cd_ok {
+    if !wait_for_serial_active_line(session, 20, 60, |line| line.contains(&expected_sub_prompt)) {
         return Err(format!(
             "[{}] Native /bin/sh Tab completion ('cd /sys/cl\\t') did not reach '{}', active_line='{}'",
             board,
@@ -1008,16 +1001,7 @@ fn verify_native_serial_shell(board: &str, session: &EmulatorSession) -> Result<
 
     // Verify Ctrl+D (0x04 / EOF) at an empty shell prompt cleanly exits `/sys/class` shell and respawns `/bin/sh -i` at `/`
     session.send_serial_input("\x04")?;
-    let mut respawn_ok = false;
-    for _ in 0..30 {
-        thread::sleep(Duration::from_millis(60));
-        let snap = session.serial_snapshot();
-        if snap.active_line.contains(&expected_root_prompt) {
-            respawn_ok = true;
-            break;
-        }
-    }
-    if !respawn_ok {
+    if !wait_for_serial_active_line(session, 30, 60, |line| line.contains(&expected_root_prompt)) {
         return Err(format!(
             "[{}] Ctrl+D (0x04 / EOF) at empty prompt did not exit and respawn `/bin/sh -i` at '/', active_line='{}'",
             board,
@@ -1026,19 +1010,7 @@ fn verify_native_serial_shell(board: &str, session: &EmulatorSession) -> Result<
     }
 
     session.send_serial_input("echo Привет_UTF8\n")?;
-    let mut utf8_ok = false;
-    for _ in 0..20 {
-        thread::sleep(Duration::from_millis(60));
-        if session
-            .serial_lines()
-            .iter()
-            .any(|l| l.trim() == "Привет_UTF8")
-        {
-            utf8_ok = true;
-            break;
-        }
-    }
-    if !utf8_ok {
+    if !wait_for_serial_completed_line(session, 20, 60, "Привет_UTF8") {
         return Err(format!(
             "[{}] Expected intact UTF-8 output 'Привет_UTF8' on ttyAMA0, got {:?}",
             board,
@@ -1052,18 +1024,7 @@ fn verify_native_serial_shell(board: &str, session: &EmulatorSession) -> Result<
     session.send_serial_input("\x03")?;
     thread::sleep(Duration::from_millis(120));
     session.send_serial_input("echo AFTER_PROMPT_CTRL_C\n")?;
-    let mut prompt_ctrl_c_ok = false;
-    for _ in 0..25 {
-        thread::sleep(Duration::from_millis(60));
-        if session
-            .serial_lines()
-            .iter()
-            .any(|l| l.trim() == "AFTER_PROMPT_CTRL_C")
-        {
-            prompt_ctrl_c_ok = true;
-            break;
-        }
-    }
+    let prompt_ctrl_c_ok = wait_for_serial_completed_line(session, 25, 60, "AFTER_PROMPT_CTRL_C");
     if !prompt_ctrl_c_ok
         || session
             .serial_lines()
@@ -1081,16 +1042,9 @@ fn verify_native_serial_shell(board: &str, session: &EmulatorSession) -> Result<
     session.send_serial_input("sleep 30\n")?;
     thread::sleep(Duration::from_millis(180));
     session.send_serial_input("\x03")?;
-    let mut ctrl_c_ok = false;
-    for _ in 0..25 {
-        thread::sleep(Duration::from_millis(60));
-        let snap = session.serial_snapshot();
-        if snap.active_line.contains(&expected_root_prompt) && !snap.active_line.contains("sleep") {
-            ctrl_c_ok = true;
-            break;
-        }
-    }
-    if !ctrl_c_ok {
+    if !wait_for_serial_active_line(session, 25, 60, |line| {
+        line.contains(&expected_root_prompt) && !line.contains("sleep")
+    }) {
         return Err(format!(
             "[{}] Ctrl+C (0x03 / SIGINT) did not interrupt foreground `sleep 30` on ttyAMA0, active_line='{}'",
             board,
@@ -1102,16 +1056,9 @@ fn verify_native_serial_shell(board: &str, session: &EmulatorSession) -> Result<
     session.send_serial_input("top\n")?;
     thread::sleep(Duration::from_millis(250));
     session.send_serial_input("\x03")?;
-    let mut top_ctrl_c_ok = false;
-    for _ in 0..25 {
-        thread::sleep(Duration::from_millis(60));
-        let snap = session.serial_snapshot();
-        if snap.active_line.contains(&expected_root_prompt) && !snap.active_line.contains("top") {
-            top_ctrl_c_ok = true;
-            break;
-        }
-    }
-    if !top_ctrl_c_ok {
+    if !wait_for_serial_active_line(session, 25, 60, |line| {
+        line.contains(&expected_root_prompt) && !line.contains("top")
+    }) {
         return Err(format!(
             "[{}] Ctrl+C (0x03) did not exit foreground `top` on ttyAMA0, active_line='{}'",
             board,
@@ -1123,16 +1070,9 @@ fn verify_native_serial_shell(board: &str, session: &EmulatorSession) -> Result<
     session.send_serial_input("cat\n")?;
     thread::sleep(Duration::from_millis(180));
     session.send_serial_input("\x04")?;
-    let mut ctrl_d_ok = false;
-    for _ in 0..25 {
-        thread::sleep(Duration::from_millis(60));
-        let snap = session.serial_snapshot();
-        if snap.active_line.contains(&expected_root_prompt) && !snap.active_line.contains("cat") {
-            ctrl_d_ok = true;
-            break;
-        }
-    }
-    if !ctrl_d_ok {
+    if !wait_for_serial_active_line(session, 25, 60, |line| {
+        line.contains(&expected_root_prompt) && !line.contains("cat")
+    }) {
         return Err(format!(
             "[{}] Ctrl+D (0x04 / EOF) did not terminate foreground `cat` on ttyAMA0, active_line='{}'",
             board,
