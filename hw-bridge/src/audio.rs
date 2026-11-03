@@ -198,21 +198,47 @@ pub fn spawn_alsa_loopback_capture(state: Arc<BridgeState>) {
     });
 }
 
+/// Generates a symbol-version-patched `/bkupgrade/data/opt/lib/libasound.so.2` and bind-mounts
+/// it over both `/system/vendor/quasar/libs/libasound.so.2*` and `/usr/lib/libasound.so.2*`.
+///
+/// Why this exists:
+/// 1. In 32-bit Quasar firmware images, `/system/vendor/quasar/libs/libasound.so.2.0.0` exports
+///    ALSA symbols with `.gnu.version == 0x8002` (`ALSA_0.9` hidden/unpopulated) and `0x0003`
+///    (`ALSA_0.9.0rc4`), whereas `/usr/lib/libasound.so.2` lacks `VERDEF` version tags entirely.
+/// 2. The stock `/system/vendor/quasar/q` script overrides `LD_LIBRARY_PATH=/system/vendor/quasar/libs`,
+///    bypassing `/bkupgrade/data/opt/lib` and causing the dynamic linker to emit
+///    `libasound.so.2: no version information available` on `stderr`.
+/// 3. Bind-mounting the patched library directly over `/system/vendor/quasar/libs/libasound.so.2.0.0`,
+///    `/system/vendor/quasar/libs/libasound.so.2`, `/usr/lib/libasound.so.2.0.0`, and
+///    `/usr/lib/libasound.so.2` ensures zero linker warnings regardless of `LD_LIBRARY_PATH`.
 pub fn ensure_alsa_compat_lib() {
     const ALSA_COMPAT_LIB_DIR: &str = "/bkupgrade/data/opt/lib";
     const ALSA_COMPAT_LIB_PATH: &str = "/bkupgrade/data/opt/lib/libasound.so.2";
     const SYSTEM_LIBASOUND_PATH: &str = "/system/vendor/quasar/libs/libasound.so.2.0.0";
+    const BIND_TARGETS: [&str; 4] = [
+        "/system/vendor/quasar/libs/libasound.so.2.0.0",
+        "/system/vendor/quasar/libs/libasound.so.2",
+        "/usr/lib/libasound.so.2.0.0",
+        "/usr/lib/libasound.so.2",
+    ];
+
+    let bind_patched_alsa_lib = || {
+        for target in BIND_TARGETS {
+            let _ = crate::runtime_env::bind_mount_file(ALSA_COMPAT_LIB_PATH, target);
+        }
+    };
 
     if fs::metadata(ALSA_COMPAT_LIB_PATH)
         .map(|m| m.len() > 500_000)
         .unwrap_or(false)
     {
+        bind_patched_alsa_lib();
         return;
     }
     let Ok(mut data) = fs::read(SYSTEM_LIBASOUND_PATH) else {
         return;
     };
-    if data.len() < 64 || &data[0..4] != b"\x7fELF" {
+    if data.len() < 64 || &data[0..4] != b"\x7fELF" || data[4] != 1 {
         return;
     }
 
@@ -295,5 +321,12 @@ pub fn ensure_alsa_compat_lib() {
     }
 
     let _ = fs::create_dir_all(ALSA_COMPAT_LIB_DIR);
-    let _ = fs::write(ALSA_COMPAT_LIB_PATH, &data);
+    if fs::write(ALSA_COMPAT_LIB_PATH, &data).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(ALSA_COMPAT_LIB_PATH, fs::Permissions::from_mode(0o755));
+        }
+        bind_patched_alsa_lib();
+    }
 }

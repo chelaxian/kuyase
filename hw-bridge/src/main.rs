@@ -5,6 +5,7 @@ mod input;
 mod ipc;
 mod leds;
 mod proto;
+mod runtime_env;
 mod state;
 mod tts;
 mod voice_dialog;
@@ -33,6 +34,9 @@ fn ensure_guest_network_defaults() {
 }
 
 fn main() {
+    if runtime_env::maybe_run_stub_applet() {
+        return;
+    }
     ensure_guest_network_defaults();
     input::ensure_adbd_signals_unignored();
     audio::ensure_alsa_compat_lib();
@@ -64,6 +68,8 @@ fn main() {
         jack_uinput,
         key_uinput,
     ));
+
+    runtime_env::prepare_runtime_environment(&state.board_slug, state.full_mode);
 
     state.log(format!(
         "Initialized Virtual Speaker Twin for {} (ring={} [{}], aux={} [{}], display={})",
