@@ -1,23 +1,21 @@
-use crate::audio::{play_expressive_tts_to_alsa, play_synthetic_tone_to_alsa};
-use crate::input::emit_compat_input_event;
-use crate::ipc::{broadcast_alice_speech, speech_subscribers};
-use crate::proto::{frame_quasar_packet, push_len_delimited};
+use crate::audio::play_synthetic_tone_to_alsa;
+use crate::input::{
+    spawn_button_press_uinput, spawn_tof_swipe_uinput, write_tof_distance_uinput,
+};
 use crate::state::{AliceState, BridgeState, MAIND_LOG_PATH};
+use crate::voice_dialog::{handle_inject_voice, handle_ipc_test, set_host_volume};
 use protocol::{
     read_host_command, write_guest_packet, BridgeStateSnapshot, GuestPacket, HostCommand,
 };
 use std::env;
 use std::fs;
-use std::io::{BufReader, Write};
+use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
-
-const AIRPLAY_PRIVATE_BUS_PATH: &str = "/run/station-airplay/private-bus";
 
 pub fn run_server(state: Arc<BridgeState>) {
     let bind_addr = env::var("HW_BRIDGE_BIND").unwrap_or_else(|_| "0.0.0.0:8091".to_string());
@@ -39,119 +37,6 @@ fn read_maind_log_tail(max_lines: usize) -> Vec<String> {
     let all: Vec<&str> = raw.lines().collect();
     let start = all.len().saturating_sub(max_lines);
     all[start..].iter().map(|s| (*s).to_string()).collect()
-}
-
-fn parse_phrase_volume(phrase: &str) -> Option<u32> {
-    let lower = phrase.to_lowercase();
-    if !lower.contains("громкост") && !lower.contains("volume") {
-        return None;
-    }
-    for tok in lower.split(|c: char| !c.is_ascii_digit()) {
-        if !tok.is_empty() {
-            if let Ok(v) = tok.parse::<u32>() {
-                return Some(v.min(10));
-            }
-        }
-    }
-    None
-}
-
-fn push_volume_to_luna(level: u32) {
-    let percent = level.min(10) * 10;
-
-    // If Luna is running on 127.0.0.1:8099, forward the host volume change
-    // via its native HTTP API (`/api/volume/set`).
-    let luna_addr = std::net::SocketAddr::from(([127, 0, 0, 1], 8099));
-    if let Ok(mut s) = TcpStream::connect_timeout(&luna_addr, Duration::from_millis(80)) {
-        let _ = s.set_write_timeout(Some(Duration::from_millis(250)));
-        let body = format!("{{\"percent\":{percent}}}");
-        let req = format!(
-            "POST /api/volume/set HTTP/1.0\r\nHost: 127.0.0.1:8099\r\nContent-Type: application/json\r\nX-Luna-Local: 1\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        let _ = s.write_all(req.as_bytes());
-    }
-}
-
-fn set_host_volume(state: &BridgeState, level: u32) {
-    state.set_volume_level(level);
-    push_volume_to_luna(level);
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TransportCommand {
-    Pause,
-    Play,
-    Next,
-    Previous,
-}
-
-impl TransportCommand {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Pause => "Pause",
-            Self::Play => "Play",
-            Self::Next => "Next",
-            Self::Previous => "Previous",
-        }
-    }
-}
-
-fn parse_phrase_transport(phrase: &str) -> Option<TransportCommand> {
-    let p = phrase.to_lowercase();
-    if p.contains("пауз") || p.contains("pause") || p.contains("стоп") || p.contains("останов") {
-        Some(TransportCommand::Pause)
-    } else if p.contains("продолж")
-        || p.contains("resume")
-        || p.contains("играй")
-        || p.contains("плей")
-        || p.contains("play")
-    {
-        Some(TransportCommand::Play)
-    } else if p.contains("дальше") || p.contains("следующ") || p.contains("next") {
-        Some(TransportCommand::Next)
-    } else if p.contains("назад") || p.contains("предыдущ") || p.contains("previous") {
-        Some(TransportCommand::Previous)
-    } else {
-        None
-    }
-}
-
-fn send_airplay_transport(command: TransportCommand) -> Result<(), String> {
-    // Same D-Bus call the station-airplay plugin's Alice button uses.
-    // --print-reply is mandatory: without it dbus-send disconnects before the
-    // call is delivered and the transport command silently does nothing.
-    let method = format!(
-        "org.gnome.ShairportSync.RemoteControl.{}",
-        command.as_str()
-    );
-    match Command::new("dbus-send")
-        .arg(format!("--bus=unix:path={AIRPLAY_PRIVATE_BUS_PATH}"))
-        .arg("--print-reply")
-        .arg("--dest=org.gnome.ShairportSync")
-        .arg("/org/gnome/ShairportSync")
-        .arg(method)
-        .output()
-    {
-        Ok(out) if out.status.success() => Ok(()),
-        Ok(out) => Err(format!(
-            "dbus-send failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )),
-        Err(error) => Err(format!("dbus-send failed: {error}")),
-    }
-}
-
-fn send_local_aliced_packet(payload: &[u8]) -> bool {
-    let Ok(mut s) = TcpStream::connect("127.0.0.1:9875") else {
-        return false;
-    };
-    let _ = s.set_nodelay(true);
-    let framed = frame_quasar_packet(payload);
-    let ok = s.write_all(&framed).is_ok();
-    let _ = s.flush();
-    ok
 }
 
 pub fn build_state_snapshot(state: &Arc<BridgeState>) -> BridgeStateSnapshot {
@@ -291,37 +176,7 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
                 }
             }
 
-            let st = state.clone();
-            let btn_s = btn.to_string();
-            let act_s = act.to_string();
-            thread::spawn(move || {
-                let code: u16 = match btn_s.as_str() {
-                    "volume_up" => 115,
-                    "volume_down" => 114,
-                    "mute" => 113,
-                    _ => 582,
-                };
-                let clicks = match act_s.as_str() {
-                    "double" => 2,
-                    "triple" => 3,
-                    _ => 1,
-                };
-                let hold_ms = if act_s == "long" { 900 } else { 50 };
-                for c in 0..clicks {
-                    if let Some(ref mut f) = *st.key_uinput.lock().unwrap() {
-                        emit_compat_input_event(f, 1, code, 1);
-                        emit_compat_input_event(f, 0, 0, 0);
-                    }
-                    thread::sleep(Duration::from_millis(hold_ms));
-                    if let Some(ref mut f) = *st.key_uinput.lock().unwrap() {
-                        emit_compat_input_event(f, 1, code, 0);
-                        emit_compat_input_event(f, 0, 0, 0);
-                    }
-                    if c + 1 < clicks {
-                        thread::sleep(Duration::from_millis(90));
-                    }
-                }
-            });
+            spawn_button_press_uinput(state.clone(), btn, act);
 
             GuestPacket::CommandAck {
                 ok: true,
@@ -481,38 +336,9 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
                     "Inject ToF swipe gesture [{}] (140mm -> {}mm)",
                     dir, restore_tof
                 ));
-                let st = state.clone();
-                thread::spawn(move || {
-                    if let Some(ref mut f) = *st.tof_uinput.lock().unwrap() {
-                        emit_compat_input_event(f, 3, 0x19, 0);
-                        emit_compat_input_event(f, 3, 0x12, 140);
-                        if dir_code != 0 {
-                            emit_compat_input_event(f, 3, 0x18, dir_code);
-                        }
-                        emit_compat_input_event(f, 0, 0, 0);
-                    }
-                    st.tof_mm.store(140, Ordering::SeqCst);
-                    thread::sleep(Duration::from_millis(110));
-                    if let Some(ref mut f) = *st.tof_uinput.lock().unwrap() {
-                        emit_compat_input_event(
-                            f,
-                            3,
-                            0x19,
-                            if restore_tof < 500 { 0 } else { 4 },
-                        );
-                        emit_compat_input_event(f, 3, 0x12, restore_tof as i32);
-                        emit_compat_input_event(f, 0, 0, 0);
-                    }
-                    st.tof_mm.store(restore_tof, Ordering::SeqCst);
-                });
+                spawn_tof_swipe_uinput(state.clone(), dir_code, restore_tof);
             } else if let Some(tof) = tof_mm {
-                let mm = tof as i32;
-                state.tof_mm.store(tof, Ordering::SeqCst);
-                if let Some(ref mut f) = *state.tof_uinput.lock().unwrap() {
-                    emit_compat_input_event(f, 3, 0x19, if mm < 500 { 0 } else { 4 });
-                    emit_compat_input_event(f, 3, 0x12, mm);
-                    emit_compat_input_event(f, 0, 0, 0);
-                }
+                write_tof_distance_uinput(state, tof);
             }
             GuestPacket::CommandAck {
                 ok: true,
@@ -525,196 +351,8 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
             doa_angle,
             rms,
             wake_only,
-        } => {
-            if state.mics_muted.load(Ordering::Relaxed) {
-                state.log("WARN Voice Input ignored: Microphones are MUTED (red LED ring active)");
-                return GuestPacket::CommandAck {
-                    ok: false,
-                    error: Some("mics_muted".to_string()),
-                    message: None,
-                };
-            }
-
-            if let Some(doa) = doa_angle {
-                state.doa_angle.store(doa % 360, Ordering::SeqCst);
-            }
-            if let Some(r) = rms {
-                state.mic_rms.store(r, Ordering::SeqCst);
-            }
-            let phrase_clean = phrase.trim().to_string();
-
-            let seq = state.dialog_seq.fetch_add(1, Ordering::SeqCst) + 1;
-            state.set_alice_state(AliceState::Listening);
-            state.mic_burst_active.store(true, Ordering::SeqCst);
-            state.append_maind_log("[sdk] onAliceStateChanged: LISTENING");
-            if !wake_only && !phrase_clean.is_empty() {
-                state.log(format!(
-                    "Voice Input -> DOA={}°, recognizedPhrase='{}' (1680ms hijack window started)",
-                    state.doa_angle.load(Ordering::Relaxed),
-                    phrase_clean
-                ));
-                state.append_maind_log(&format!(
-                    "[sdk] onRequestStateChanged: LISTENING, recognizedPhrase='{}'",
-                    phrase_clean
-                ));
-            } else {
-                state.log(format!(
-                    "Voice Wake Word -> DOA={}°",
-                    state.doa_angle.load(Ordering::Relaxed)
-                ));
-            }
-
-            // A recognised phrase is what triggers the station's own command
-            // path: aliced event -> Luna /speech/next -> station-airplay. The
-            // emulator has no recogniser, so publish the frame ourselves.
-            if !wake_only && !phrase_clean.is_empty() {
-                let request_id = format!("emu-{seq}");
-                let transcript = phrase_clean.clone();
-                let st_event = state.clone();
-                thread::spawn(move || {
-                    thread::sleep(Duration::from_millis(300));
-                    broadcast_alice_speech(&transcript, &request_id);
-                    st_event.log(format!(
-                        "Voice recognition -> aliced event request_id={} ({} subscriber(s))",
-                        request_id,
-                        speech_subscribers()
-                    ));
-                });
-            }
-
-            let st = state.clone();
-            let has_phrase = !wake_only && !phrase_clean.is_empty();
-            let phrase_for_tts = phrase_clean.clone();
-            let parsed_vol = parse_phrase_volume(&phrase_clean);
-            let parsed_transport = parse_phrase_transport(&phrase_clean);
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(650));
-                st.mic_burst_active.store(false, Ordering::SeqCst);
-                if !st.mics_muted.load(Ordering::Relaxed) {
-                    st.mic_rms.store(60, Ordering::SeqCst);
-                }
-
-                if has_phrase {
-                    thread::sleep(Duration::from_millis(1030));
-                    if st.dialog_seq.load(Ordering::SeqCst) == seq
-                        && st.hijacked_seq.load(Ordering::SeqCst) < seq
-                    {
-                        if let Some(v) = parsed_vol {
-                            set_host_volume(&st, v);
-                        }
-                        if let Some(cmd) = parsed_transport {
-                            if Path::new(AIRPLAY_PRIVATE_BUS_PATH).exists() {
-                                // The plugin only executes after Luna hands it the
-                                // aliced event, and on the bench Luna's runtime API
-                                // can stall under TCG. If the plugin did not claim
-                                // the dialog (this branch only runs when it did
-                                // not), send the same D-Bus call it would have sent.
-                                let how = if speech_subscribers() == 0 {
-                                    "direct, no aliced subscriber"
-                                } else {
-                                    "direct, plugin did not claim"
-                                };
-                                match send_airplay_transport(cmd) {
-                                    Ok(()) => {
-                                        st.log(format!(
-                                            "Voice transport -> AirPlay {} ({}, dbus-send -> ok)",
-                                            cmd.as_str(),
-                                            how
-                                        ));
-                                        // Transport commands are silent on a real station:
-                                        // the command spotter acts and Alice says nothing.
-                                        st.log("Dialog Hijack window (1680ms) expired without CANCEL_DIALOG -> transport handled silently");
-                                        st.set_alice_state(AliceState::Idle);
-                                        st.append_maind_log("[sdk] onAliceStateChanged: IDLE");
-                                        return;
-                                    }
-                                    Err(err) => {
-                                        st.log(format!(
-                                            "Voice transport -> AirPlay {} ({}, {})",
-                                            cmd.as_str(),
-                                            how,
-                                            err
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                        let auto_reply = format!("Выполняю: {}", phrase_for_tts);
-                        *st.last_spoken_text.lock().unwrap() = auto_reply.clone();
-                        st.set_alice_state(AliceState::Speaking);
-                        st.log("Dialog Hijack window (1680ms) expired without CANCEL_DIALOG -> native Alice SPEAKING");
-                        st.append_maind_log("[sdk] onAliceStateChanged: SPEAKING");
-                        st.append_maind_log("[sdk] onTtsStarted: request_id=alice_cloud_auto");
-                        let _ = play_expressive_tts_to_alsa(&st, &auto_reply, seq);
-                        if st.dialog_seq.load(Ordering::SeqCst) == seq {
-                            st.set_alice_state(AliceState::Idle);
-                            st.append_maind_log(
-                                "[sdk] onTtsCompleted: request_id=alice_cloud_auto",
-                            );
-                            st.append_maind_log("[sdk] onAliceStateChanged: IDLE");
-                        }
-                    }
-                } else {
-                    thread::sleep(Duration::from_millis(1200));
-                    if st.dialog_seq.load(Ordering::SeqCst) == seq
-                        && st.hijacked_seq.load(Ordering::SeqCst) < seq
-                    {
-                        st.set_alice_state(AliceState::Idle);
-                        st.append_maind_log("[sdk] onAliceStateChanged: IDLE");
-                    }
-                }
-            });
-
-            GuestPacket::CommandAck {
-                ok: true,
-                error: None,
-                message: Some(phrase_clean),
-            }
-        }
-        HostCommand::IpcTest { cmd, text } => {
-            let cmd_str = if cmd.is_empty() {
-                "cancel_dialog"
-            } else {
-                cmd.as_str()
-            };
-            let txt = text
-                .as_deref()
-                .unwrap_or("Проверка локального синтеза речи Алисы")
-                .trim();
-            let mut alice_method = Vec::new();
-            match cmd_str {
-                "stop_tts" => {
-                    alice_method.extend_from_slice(&[0x08, 14]);
-                }
-                "vocalize" => {
-                    let mut voc_dir = Vec::new();
-                    push_len_delimited(&mut voc_dir, 1, txt.as_bytes());
-                    voc_dir.extend_from_slice(&[0x10, 0x01]);
-                    alice_method.extend_from_slice(&[0x08, 18, 0x18, 0x00]);
-                    push_len_delimited(&mut alice_method, 13, &voc_dir);
-                }
-                _ => {
-                    alice_method.extend_from_slice(&[0x08, 0x06]);
-                }
-            }
-            let mut remoting = Vec::new();
-            push_len_delimited(&mut remoting, 7, b"AliceCapability");
-            push_len_delimited(&mut remoting, 8, &alice_method);
-            let mut qmsg = Vec::new();
-            push_len_delimited(&mut qmsg, 210, &remoting);
-            let sent = send_local_aliced_packet(&qmsg);
-            // Allow local aliced IPC server thread (:9875) to process packet before snapshot
-            thread::sleep(Duration::from_millis(15));
-            GuestPacket::CommandAck {
-                ok: sent,
-                error: if sent {
-                    None
-                } else {
-                    Some("aliced_connect_failed".to_string())
-                },
-                message: Some(cmd_str.to_string()),
-            }
-        }
+        } => handle_inject_voice(state, phrase, doa_angle, rms, wake_only),
+        HostCommand::IpcTest { cmd, text } => handle_ipc_test(cmd, text),
         HostCommand::PlayTestTone => {
             state.log("Playing 440 Hz test tone to ALSA default -> snd-aloop");
             thread::spawn(|| {
@@ -758,14 +396,12 @@ fn handle_client(stream: TcpStream, state: Arc<BridgeState>) -> std::io::Result<
 
     let (tx, rx) = mpsc::sync_channel::<GuestPacket>(512);
 
-    // Immediately push initial StateSnapshot on connect before registering in bridge_clients
     let initial_snap = build_state_snapshot(&state);
     let _ = tx.send(GuestPacket::StateSnapshot(initial_snap.clone()));
     state.bridge_clients.lock().unwrap().push(tx.clone());
 
     let alive = Arc::new(AtomicBool::new(true));
 
-    // Dedicated writer thread for this client
     let alive_writer = alive.clone();
     thread::spawn(move || {
         for pkt in rx {
@@ -776,7 +412,6 @@ fn handle_client(stream: TcpStream, state: Arc<BridgeState>) -> std::io::Result<
         alive_writer.store(false, Ordering::SeqCst);
     });
 
-    // Periodic state push thread (~22 Hz when state changes, 250ms heartbeat)
     let alive_pusher = alive.clone();
     let tx_pusher = tx.clone();
     let state_pusher = state.clone();
@@ -800,7 +435,6 @@ fn handle_client(stream: TcpStream, state: Arc<BridgeState>) -> std::io::Result<
         }
     });
 
-    // Reader loop receiving HostCommand frames
     let mut reader = BufReader::new(stream);
     while alive.load(Ordering::Relaxed) {
         match read_host_command(&mut reader) {
@@ -820,35 +454,4 @@ fn handle_client(stream: TcpStream, state: Arc<BridgeState>) -> std::io::Result<
 
     alive.store(false, Ordering::SeqCst);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_phrase_volume_and_transport() {
-        assert_eq!(parse_phrase_volume("поставь громкость 4"), Some(4));
-        assert_eq!(parse_phrase_volume("volume 9"), Some(9));
-        assert_eq!(parse_phrase_volume("volume 15"), Some(10));
-        assert_eq!(parse_phrase_volume("включи ночной режим"), None);
-
-        assert_eq!(
-            parse_phrase_transport("поставь на паузу"),
-            Some(TransportCommand::Pause)
-        );
-        assert_eq!(
-            parse_phrase_transport("продолжи воспроизведение"),
-            Some(TransportCommand::Play)
-        );
-        assert_eq!(
-            parse_phrase_transport("следующий трек"),
-            Some(TransportCommand::Next)
-        );
-        assert_eq!(
-            parse_phrase_transport("предыдущий трек"),
-            Some(TransportCommand::Previous)
-        );
-        assert_eq!(parse_phrase_transport("какая погода"), None);
-    }
 }

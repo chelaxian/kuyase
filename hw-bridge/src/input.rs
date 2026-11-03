@@ -7,6 +7,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(target_os = "linux")]
 extern "C" {
     fn ioctl(fd: i32, request: u32, ...) -> i32;
+    fn setsid() -> i32;
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct Winsize {
+    ws_row: u16,
+    ws_col: u16,
+    ws_xpixel: u16,
+    ws_ypixel: u16,
 }
 
 #[cfg(target_os = "linux")]
@@ -123,11 +133,99 @@ pub fn emit_compat_input_event(file: &mut File, ev_type: u16, code: u16, value: 
     let _ = file.flush();
 }
 
+pub fn spawn_button_press_uinput(
+    state: std::sync::Arc<crate::state::BridgeState>,
+    btn: &str,
+    act: &str,
+) {
+    let btn_s = btn.to_string();
+    let act_s = act.to_string();
+    thread::spawn(move || {
+        let code: u16 = match btn_s.as_str() {
+            "volume_up" => 115,
+            "volume_down" => 114,
+            "mute" => 113,
+            _ => 582,
+        };
+        let clicks = match act_s.as_str() {
+            "double" => 2,
+            "triple" => 3,
+            _ => 1,
+        };
+        let hold_ms = if act_s == "long" { 900 } else { 50 };
+        for c in 0..clicks {
+            if let Some(ref mut f) = *state.key_uinput.lock().unwrap() {
+                emit_compat_input_event(f, 1, code, 1);
+                emit_compat_input_event(f, 0, 0, 0);
+            }
+            thread::sleep(Duration::from_millis(hold_ms));
+            if let Some(ref mut f) = *state.key_uinput.lock().unwrap() {
+                emit_compat_input_event(f, 1, code, 0);
+                emit_compat_input_event(f, 0, 0, 0);
+            }
+            if c + 1 < clicks {
+                thread::sleep(Duration::from_millis(90));
+            }
+        }
+    });
+}
+
+pub fn spawn_tof_swipe_uinput(
+    state: std::sync::Arc<crate::state::BridgeState>,
+    dir_code: i32,
+    restore_tof: u32,
+) {
+    use std::sync::atomic::Ordering;
+    thread::spawn(move || {
+        if let Some(ref mut f) = *state.tof_uinput.lock().unwrap() {
+            emit_compat_input_event(f, 3, 0x19, 0);
+            emit_compat_input_event(f, 3, 0x12, 140);
+            if dir_code != 0 {
+                emit_compat_input_event(f, 3, 0x18, dir_code);
+            }
+            emit_compat_input_event(f, 0, 0, 0);
+        }
+        state.tof_mm.store(140, Ordering::SeqCst);
+        thread::sleep(Duration::from_millis(110));
+        if let Some(ref mut f) = *state.tof_uinput.lock().unwrap() {
+            emit_compat_input_event(f, 3, 0x19, if restore_tof < 500 { 0 } else { 4 });
+            emit_compat_input_event(f, 3, 0x12, restore_tof as i32);
+            emit_compat_input_event(f, 0, 0, 0);
+        }
+        state.tof_mm.store(restore_tof, Ordering::SeqCst);
+    });
+}
+
+pub fn write_tof_distance_uinput(state: &crate::state::BridgeState, tof: u32) {
+    use std::sync::atomic::Ordering;
+    let mm = tof as i32;
+    state.tof_mm.store(tof, Ordering::SeqCst);
+    if let Some(ref mut f) = *state.tof_uinput.lock().unwrap() {
+        emit_compat_input_event(f, 3, 0x19, if mm < 500 { 0 } else { 4 });
+        emit_compat_input_event(f, 3, 0x12, mm);
+        emit_compat_input_event(f, 0, 0, 0);
+    }
+}
+
 pub fn spawn_serial_console_watcher() {
     thread::spawn(|| {
         thread::sleep(Duration::from_millis(600));
+        // Suppress post-boot KERN_INFO/KERN_WARNING spam (e.g. ALSA ShareContextCreate / oom_adj)
+        // from corrupting the interactive ttyAMA0 shell prompt; full log remains in `dmesg`.
+        let _ = std::fs::write("/proc/sys/kernel/printk", "3 4 1 3\n");
         let _ = Command::new("stty")
-            .args(["-F", "/dev/ttyAMA0", "sane", "echo", "icrnl"])
+            .args([
+                "-F",
+                "/dev/ttyAMA0",
+                "sane",
+                "rows",
+                "40",
+                "cols",
+                "120",
+                "echo",
+                "icrnl",
+                "iutf8",
+            ])
             .status();
         if let Ok(mut tty) = OpenOptions::new().write(true).open("/dev/ttyAMA0") {
             let _ = tty.write_all(
@@ -141,12 +239,44 @@ pub fn spawn_serial_console_watcher() {
                 OpenOptions::new().write(true).open("/dev/ttyAMA0"),
                 OpenOptions::new().write(true).open("/dev/ttyAMA0"),
             ) {
-                let _ = Command::new("/bin/sh")
-                    .arg("-i")
+                let mut cmd = Command::new("/bin/sh");
+                cmd.arg("-i")
+                    .current_dir("/")
+                    .env("TERM", "vt100")
+                    .env("LANG", "C.UTF-8")
+                    .env("LC_ALL", "C.UTF-8")
+                    .env("HOME", "/root")
+                    .env("USER", "root")
+                    .env("LOGNAME", "root")
+                    .env("PS1", "\\u@\\h:\\w# ")
+                    .env(
+                        "PATH",
+                        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/system/vendor/quasar:/data/yam/bin",
+                    )
                     .stdin(Stdio::from(sin))
                     .stdout(Stdio::from(sout))
-                    .stderr(Stdio::from(serr))
-                    .status();
+                    .stderr(Stdio::from(serr));
+
+                #[cfg(target_os = "linux")]
+                unsafe {
+                    use std::os::unix::process::CommandExt;
+                    const TIOCSCTTY: u32 = 0x540E;
+                    const TIOCSWINSZ: u32 = 0x5414;
+                    cmd.pre_exec(|| {
+                        setsid();
+                        ioctl(0, TIOCSCTTY, 1);
+                        let ws = Winsize {
+                            ws_row: 40,
+                            ws_col: 120,
+                            ws_xpixel: 0,
+                            ws_ypixel: 0,
+                        };
+                        ioctl(0, TIOCSWINSZ, &ws as *const Winsize);
+                        Ok(())
+                    });
+                }
+
+                let _ = cmd.status();
             }
             thread::sleep(Duration::from_millis(500));
         }

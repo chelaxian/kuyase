@@ -122,158 +122,49 @@ impl BoardProfile {
         });
 
         let (board_slug, board_name, sysfs_prefix, ring_leds, logo_leds, ambilight_leds, has_clock) =
-            match raw_slug.as_str() {
-                "cucumber" => (
-                    "cucumber".to_string(),
-                    "Яндекс Станция Миди (YNDX-00054 / cucumber)".to_string(),
-                    "cucumber".to_string(),
-                    24,
-                    6,
-                    0,
-                    true,
-                ),
-                "orion" => (
-                    "orion".to_string(),
-                    "Яндекс Станция 3 (YNDX-00055 / orion)".to_string(),
-                    "orion".to_string(),
-                    36,
-                    0,
-                    12,
-                    false,
-                ),
-                "yandexmini2" => (
-                    "yandexmini2".to_string(),
-                    "Яндекс Станция Мини 2 с часами (YNDX-00021 / yandexmini2)".to_string(),
-                    "mini2".to_string(),
-                    6,
-                    0,
-                    0,
-                    true,
-                ),
-                "yandexmini2nc" => (
-                    "yandexmini2nc".to_string(),
-                    "Яндекс Станция Мини 2 без часов (YNDX-00020 / yandexmini2nc)".to_string(),
-                    "mini2".to_string(),
-                    6,
-                    0,
-                    0,
-                    false,
-                ),
-                "bergamot" => (
-                    "bergamot".to_string(),
-                    "Яндекс Станция Мини 3 (YNDX-00027 / bergamot)".to_string(),
-                    "bergamot".to_string(),
-                    6,
-                    0,
-                    0,
-                    true,
-                ),
-                "pickle" => (
-                    "pickle".to_string(),
-                    "Яндекс Станция Мини 3 Про (pickle)".to_string(),
-                    "pickle".to_string(),
-                    16,
-                    6,
-                    0,
-                    true,
-                ),
-                "plum" => (
-                    "plum".to_string(),
-                    "Яндекс Станция Лайт 2 Plum (3 LED + часы)".to_string(),
-                    "plum".to_string(),
-                    3,
-                    0,
-                    0,
-                    true,
-                ),
-                "plumnc" => (
-                    "plumnc".to_string(),
-                    "Яндекс Станция Лайт 2 Prune (3 LED, без часов)".to_string(),
-                    "plum".to_string(),
-                    3,
-                    0,
-                    0,
-                    false,
-                ),
-                "yandexmicro" => (
-                    "yandexmicro".to_string(),
-                    "Яндекс Станция Лайт 1 (YNDX-00025 / yandexmicro)".to_string(),
-                    "micro".to_string(),
-                    3,
-                    0,
-                    0,
-                    false,
-                ),
-                "station2" => (
-                    "station2".to_string(),
-                    "Яндекс Станция 2 (YNDX-00051 / station-midi)".to_string(),
-                    "station2".to_string(),
-                    88,
-                    0,
-                    0,
-                    false,
-                ),
-                "mango" => (
-                    "mango".to_string(),
-                    "Яндекс Станция Стрит (mango)".to_string(),
-                    "mango".to_string(),
-                    4,
-                    3,
-                    0,
-                    false,
-                ),
-                "saturn" => (
-                    "saturn".to_string(),
-                    "Умный хаб Яндекса (YNDX-00050 / saturn)".to_string(),
-                    "saturn".to_string(),
-                    1,
-                    0,
-                    0,
-                    false,
-                ),
-                "yandexmini" => (
-                    "yandexmini".to_string(),
-                    "Яндекс Станция Мини 1 (YNDX-0004 / yandexmini)".to_string(),
-                    "yandexmini".to_string(),
+            if let Some(desc) = protocol::find_board_descriptor(&raw_slug) {
+                (
+                    desc.slug.to_string(),
+                    desc.board_name.to_string(),
+                    desc.sysfs_prefix.to_string(),
+                    desc.ring_leds,
+                    desc.logo_leds,
+                    desc.ambilight_leds,
+                    desc.has_clock,
+                )
+            } else if let Some(v) = fs::read_to_string("/tmp/quasar-emu-hw.json")
+                .ok()
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            {
+                let other = raw_slug.as_str();
+                (
+                    other.to_string(),
+                    v.get("board_name")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or(other)
+                        .to_string(),
+                    v.get("sysfs_prefix")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or(other)
+                        .to_string(),
+                    v.get("ring_leds").and_then(|x| x.as_u64()).unwrap_or(6) as usize,
+                    v.get("logo_leds").and_then(|x| x.as_u64()).unwrap_or(0) as usize,
+                    v.get("ambilight_leds")
+                        .and_then(|x| x.as_u64())
+                        .unwrap_or(0) as usize,
+                    v.get("has_clock").and_then(|x| x.as_bool()).unwrap_or(false),
+                )
+            } else {
+                let other = raw_slug.as_str();
+                (
+                    other.to_string(),
+                    format!("Quasar Speaker ({})", other),
+                    other.to_string(),
                     6,
                     0,
                     0,
                     false,
-                ),
-                other => {
-                    if let Some(v) = fs::read_to_string("/tmp/quasar-emu-hw.json")
-                        .ok()
-                        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-                    {
-                        (
-                            other.to_string(),
-                            v.get("board_name")
-                                .and_then(|x| x.as_str())
-                                .unwrap_or(other)
-                                .to_string(),
-                            v.get("sysfs_prefix")
-                                .and_then(|x| x.as_str())
-                                .unwrap_or(other)
-                                .to_string(),
-                            v.get("ring_leds").and_then(|x| x.as_u64()).unwrap_or(6) as usize,
-                            v.get("logo_leds").and_then(|x| x.as_u64()).unwrap_or(0) as usize,
-                            v.get("ambilight_leds")
-                                .and_then(|x| x.as_u64())
-                                .unwrap_or(0) as usize,
-                            v.get("has_clock").and_then(|x| x.as_bool()).unwrap_or(false),
-                        )
-                    } else {
-                        (
-                            other.to_string(),
-                            format!("Quasar Speaker ({})", other),
-                            other.to_string(),
-                            6,
-                            0,
-                            0,
-                            false,
-                        )
-                    }
-                }
+                )
             };
 
         Self {

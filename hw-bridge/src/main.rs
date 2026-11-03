@@ -7,6 +7,7 @@ mod leds;
 mod proto;
 mod state;
 mod tts;
+mod voice_dialog;
 
 use state::{BoardProfile, BridgeState};
 use std::fs;
