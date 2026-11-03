@@ -852,7 +852,9 @@ impl GuiAppState {
         };
         let trimmed = cmd_line.trim().to_string();
         let payload = if cmd_line == "\x03" {
-            "\x03\n".to_string()
+            "\x03".to_string()
+        } else if cmd_line == "\x04" {
+            "\x04".to_string()
         } else {
             format!("\x15{}\n", cmd_line.trim_end_matches(&['\r', '\n'][..]))
         };
@@ -863,6 +865,8 @@ impl GuiAppState {
         if !trimmed.is_empty() {
             let label = if cmd_line == "\x03" {
                 "^C (SIGINT)"
+            } else if cmd_line == "\x04" {
+                "^D (EOF)"
             } else {
                 &trimmed
             };

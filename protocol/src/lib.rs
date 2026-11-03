@@ -457,5 +457,27 @@ mod tests {
         assert_eq!(normalize_board_slug("station-midi"), "station2");
         assert_eq!(normalize_board_slug("midi"), "cucumber");
         assert_eq!(normalize_board_slug("station3"), "orion");
+
+        assert_eq!(
+            detect_board_hint_from_filename("bergamot-0.373.1.13.zip").as_deref(),
+            Some("bergamot")
+        );
+        assert_eq!(
+            detect_board_hint_from_filename("bergamot-0.373.1.13-rootfs.tar.gz").as_deref(),
+            Some("bergamot")
+        );
+        assert_eq!(
+            detect_board_hint_from_filename("station-lite-rootfs-2026-10-24.tgz").as_deref(),
+            Some("yandexmicro")
+        );
+        assert_eq!(
+            detect_board_hint_from_filename("Yandex-Station3-Orion-factory-13").as_deref(),
+            Some("orion")
+        );
+        assert_eq!(
+            detect_board_hint_from_filename("yandex-mini2-backup.zip").as_deref(),
+            Some("yandexmini2")
+        );
+        assert_eq!(detect_board_hint_from_filename("rootfs.tar.gz"), None);
     }
 }

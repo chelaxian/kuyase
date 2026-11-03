@@ -427,11 +427,9 @@ fn is_single_dump_dir(dir: &Path) -> bool {
     has_tgz && archive_count <= 1
 }
 
-pub fn discover_firmware_dumps(root: &Path) -> Vec<(String, PathBuf)> {
-    let mut dumps = Vec::new();
-    let backups = root.join("backups");
-    let Ok(rd) = fs::read_dir(&backups) else {
-        return dumps;
+fn collect_dumps_recursive(base: &Path, cur: &Path, out: &mut Vec<(String, PathBuf)>) {
+    let Ok(rd) = fs::read_dir(cur) else {
+        return;
     };
     for e in rd.flatten() {
         let p = e.path();
@@ -441,23 +439,25 @@ pub fn discover_firmware_dumps(root: &Path) -> Vec<(String, PathBuf)> {
         if is_ignored_backup_entry(name) {
             continue;
         }
+        let rel = p
+            .strip_prefix(base)
+            .map(|r| r.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| name.to_string());
         if p.is_dir() && !is_single_dump_dir(&p) {
-            if let Ok(sub_rd) = fs::read_dir(&p) {
-                for sub_e in sub_rd.flatten() {
-                    let sp = sub_e.path();
-                    let Some(sname) = sp.file_name().and_then(|s| s.to_str()) else {
-                        continue;
-                    };
-                    if is_ignored_backup_entry(sname) {
-                        continue;
-                    }
-                    dumps.push((format!("{}/{}", name, sname), sp));
-                }
-            }
+            collect_dumps_recursive(base, &p, out);
         } else {
-            dumps.push((name.to_string(), p));
+            out.push((rel, p));
         }
     }
+}
+
+pub fn discover_firmware_dumps(root: &Path) -> Vec<(String, PathBuf)> {
+    let mut dumps = Vec::new();
+    let backups = root.join("backups");
+    if !backups.is_dir() {
+        return dumps;
+    }
+    collect_dumps_recursive(&backups, &backups, &mut dumps);
     dumps.sort_by(|a, b| a.0.cmp(&b.0));
     dumps
 }
@@ -529,16 +529,10 @@ pub fn prepare_images(
             let req_slug = requested_board
                 .filter(|b| !b.trim().is_empty() && !b.eq_ignore_ascii_case("auto"))
                 .map(normalize_board_slug);
-            let rd = fs::read_dir(dp).map_err(|e| e.to_string())?;
-            let mut paths: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
-            paths.sort();
-            for sp in paths {
-                let Some(sname) = sp.file_name().and_then(|s| s.to_str()) else {
-                    continue;
-                };
-                if is_ignored_backup_entry(sname) {
-                    continue;
-                }
+            let mut candidates = Vec::new();
+            collect_dumps_recursive(dp, dp, &mut candidates);
+            candidates.sort_by(|a, b| a.0.cmp(&b.0));
+            for (_, sp) in candidates {
                 if let Some(ref target_slug) = req_slug {
                     if let Some(hint) = detect_board_hint_from_path(&sp) {
                         if &hint != target_slug {
@@ -559,32 +553,50 @@ pub fn prepare_images(
     if let Some(b) = requested_board {
         let candidate = Path::new(b);
         if candidate.exists() {
-            let res = build_guest_image_from_dump(root, None, candidate, None)?;
-            return Ok(vec![res]);
+            return prepare_images(root, None, Some(candidate));
         }
         let slug = normalize_board_slug(b);
+        // Priority is given to ready Guest Images in work/<board>-system.ext4
+        let existing = root.join("work").join(format!("{}-system.ext4", slug));
+        if existing.is_file() {
+            let res = build_guest_image_from_dump(root, Some(&slug), &existing, None)?;
+            return Ok(vec![res]);
+        }
         for (_, dp) in discover_firmware_dumps(root) {
             if detect_board_hint_from_path(&dp).as_deref() == Some(slug.as_str()) {
                 let res = build_guest_image_from_dump(root, Some(&slug), &dp, None)?;
                 return Ok(vec![res]);
             }
         }
-        let existing = root.join("work").join(format!("{}-system.ext4", slug));
-        if existing.is_file() {
-            let res = build_guest_image_from_dump(root, Some(&slug), &existing, None)?;
-            return Ok(vec![res]);
-        }
     }
 
+    let work_images = crate::session::discover_guest_images(root);
     let discovered = discover_firmware_dumps(root);
-    if discovered.is_empty() {
+    if work_images.is_empty() && discovered.is_empty() {
         return Err(format!(
-            "no firmware dumps found in {}/backups (use --dump <path> or run `kuyase dump <ip>`)",
+            "no guest images in {}/work and no firmware dumps in {}/backups (use --dump <path> or run `kuyase dump <ip>`)",
+            root.display(),
             root.display()
         ));
     }
     let mut built = Vec::new();
+    let mut handled_slugs = std::collections::BTreeSet::new();
+    for (slug, img_path) in work_images {
+        if let Some(req) = requested_board.filter(|s| !s.trim().is_empty() && !s.eq_ignore_ascii_case("auto")) {
+            if normalize_board_slug(req) != slug {
+                continue;
+            }
+        }
+        handled_slugs.insert(slug.clone());
+        built.push(build_guest_image_from_dump(root, Some(&slug), &img_path, None)?);
+    }
     for (_, p) in discovered {
+        if let Some(hint) = detect_board_hint_from_path(&p) {
+            if handled_slugs.contains(&hint) {
+                continue;
+            }
+            handled_slugs.insert(hint);
+        }
         built.push(build_guest_image_from_dump(root, requested_board, &p, None)?);
     }
     Ok(built)
@@ -688,7 +700,7 @@ mod tests {
             b"yandexmini2\n"
         );
 
-        // Verify tar.gz wrapping a single .ext4 image (like backups/kuyase-out/plumnc-system.tar.gz)
+        // Verify tar.gz wrapping a single .ext4 image (e.g. plumnc-system.tar.gz)
         let mut inner_ext4_tree = RootfsTree::default();
         inner_ext4_tree.insert_file(
             "system/vendor/quasar/quasar.cfg",

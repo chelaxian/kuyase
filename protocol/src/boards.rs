@@ -358,7 +358,11 @@ pub fn detect_board_slug_from_probe(dev_type_cfg: &str, model_raw: &str) -> Stri
 }
 
 pub fn detect_board_hint_from_filename(name: &str) -> Option<String> {
-    let lower = name.trim().to_ascii_lowercase();
+    let mut lower = name.trim().to_ascii_lowercase();
+    if lower.is_empty() || lower == "backups" || lower == "work" {
+        return None;
+    }
+
     for suffix in [
         "-system.tar.gz",
         "-system.tgz",
@@ -367,41 +371,85 @@ pub fn detect_board_hint_from_filename(name: &str) -> Option<String> {
         "-system-orig.ext4",
         "-rootfs.tar.gz",
         "-rootfs.tgz",
+        "-backup.zip",
+        ".tar.gz",
+        ".tgz",
+        ".tar",
+        ".zip",
+        ".ext4",
+        ".img.gz",
+        ".img",
+        ".bin",
     ] {
         if let Some(prefix) = lower.strip_suffix(suffix) {
             if !prefix.is_empty() {
-                return Some(normalize_board_slug(prefix));
+                lower = prefix.to_string();
+                break;
             }
         }
     }
+
     if let Some(rest) = lower.strip_prefix("dump-") {
-        if let Some((slug_raw, _)) = rest.split_once('-') {
-            if !slug_raw.is_empty() {
-                return Some(normalize_board_slug(slug_raw));
-            }
-        } else if !rest.is_empty() {
-            return Some(normalize_board_slug(rest));
+        if !rest.is_empty() {
+            lower = rest.to_string();
         }
     }
-    let normalized = normalize_board_slug(&lower);
-    if find_board_descriptor(&normalized).is_some() {
-        return Some(normalized);
+
+    let check_candidate = |raw: &str| -> Option<String> {
+        let norm = normalize_board_slug(raw);
+        if find_board_descriptor(&norm).is_some() {
+            Some(norm)
+        } else {
+            None
+        }
+    };
+
+    if let Some(slug) = check_candidate(&lower) {
+        return Some(slug);
     }
+
+    let tokens: Vec<&str> = lower
+        .split(['-', '_'])
+        .filter(|s| !s.is_empty())
+        .collect();
+    if tokens.len() >= 2 {
+        let two_hyphen = format!("{}-{}", tokens[0], tokens[1]);
+        if let Some(slug) = check_candidate(&two_hyphen) {
+            return Some(slug);
+        }
+        let two_under = format!("{}_{}", tokens[0], tokens[1]);
+        if let Some(slug) = check_candidate(&two_under) {
+            return Some(slug);
+        }
+        if tokens[0] == "yandex" {
+            if let Some(slug) = check_candidate(tokens[1]) {
+                return Some(slug);
+            }
+        }
+    }
+    if let Some(&first) = tokens.first() {
+        if let Some(slug) = check_candidate(first) {
+            return Some(slug);
+        }
+    }
+    for &tok in &tokens {
+        if let Some(slug) = check_candidate(tok) {
+            return Some(slug);
+        }
+    }
+
     None
 }
 
 pub fn detect_board_hint_from_path(path: &Path) -> Option<String> {
-    if let Some(fname) = path.file_name().and_then(|s| s.to_str()) {
-        if let Some(slug) = detect_board_hint_from_filename(fname) {
-            return Some(slug);
+    for ancestor in path.ancestors() {
+        let Some(fname) = ancestor.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if fname.eq_ignore_ascii_case("backups") || fname.eq_ignore_ascii_case("work") {
+            break;
         }
-    }
-    if let Some(parent_name) = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|s| s.to_str())
-    {
-        if let Some(slug) = detect_board_hint_from_filename(parent_name) {
+        if let Some(slug) = detect_board_hint_from_filename(fname) {
             return Some(slug);
         }
     }

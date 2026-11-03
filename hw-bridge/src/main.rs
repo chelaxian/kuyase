@@ -34,6 +34,7 @@ fn ensure_guest_network_defaults() {
 
 fn main() {
     ensure_guest_network_defaults();
+    input::ensure_adbd_signals_unignored();
     audio::ensure_alsa_compat_lib();
     let profile = BoardProfile::detect();
 

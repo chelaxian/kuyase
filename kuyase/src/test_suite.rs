@@ -531,6 +531,38 @@ fn verify_segment_clock_and_aux_logo(
     Ok(())
 }
 
+fn verify_bergamot_peripherals(board: &str, adb: &AdbClient) -> Result<(), String> {
+    let berg_out = adb.shell(
+        "cat /sys/bus/i2c/devices/2-002c/settings_file; \
+         cat /sys/class/power_supply/ya_pd/device/name; \
+         cat /sys/class/power_supply/ya_pd/health; \
+         cat /sys/class/power_supply/ya_pd/voltage_now; \
+         cat /sys/class/leds/bergamot:white:clockA0/device/brightness_scale",
+        Duration::from_secs(8),
+    )?;
+    let lines: Vec<&str> = berg_out
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.first().copied() != Some("bergamot-acm8625.cfg")
+        || lines.get(1).copied() != Some("husb238_pd")
+        || lines.get(2).copied() != Some("Good")
+        || lines.get(3).copied() != Some("12000")
+        || lines.get(4).map(|s| s.contains(';')).unwrap_or(false) == false
+    {
+        return Err(format!(
+            "[{}] Unexpected bergamot ACM8625P / HUSB238 PD / AW21036 sysfs state: {:?}",
+            board, lines
+        ));
+    }
+    println!(
+        "[{}] Bergamot ACM8625P (bergamot-acm8625.cfg), HUSB238 PD (12V Good) & AW21036 brightness_scale verified!",
+        board
+    );
+    Ok(())
+}
+
 fn verify_mango_peripherals(board: &str, adb: &AdbClient) -> Result<(), String> {
     let mango_out = adb.shell(
         "cat /sys/bus/i2c/devices/2-002c/settings_file; \
@@ -965,12 +997,30 @@ fn verify_native_serial_shell(board: &str, session: &EmulatorSession) -> Result<
             break;
         }
     }
-    session.send_serial_input("cd /\n")?;
     if !tab_cd_ok {
         return Err(format!(
             "[{}] Native /bin/sh Tab completion ('cd /sys/cl\\t') did not reach '{}', active_line='{}'",
             board,
             expected_sub_prompt,
+            session.serial_snapshot().active_line
+        ));
+    }
+
+    // Verify Ctrl+D (0x04 / EOF) at an empty shell prompt cleanly exits `/sys/class` shell and respawns `/bin/sh -i` at `/`
+    session.send_serial_input("\x04")?;
+    let mut respawn_ok = false;
+    for _ in 0..30 {
+        thread::sleep(Duration::from_millis(60));
+        let snap = session.serial_snapshot();
+        if snap.active_line.contains(&expected_root_prompt) {
+            respawn_ok = true;
+            break;
+        }
+    }
+    if !respawn_ok {
+        return Err(format!(
+            "[{}] Ctrl+D (0x04 / EOF) at empty prompt did not exit and respawn `/bin/sh -i` at '/', active_line='{}'",
+            board,
             session.serial_snapshot().active_line
         ));
     }
@@ -995,6 +1045,101 @@ fn verify_native_serial_shell(board: &str, session: &EmulatorSession) -> Result<
             session.serial_lines().iter().rev().take(6).collect::<Vec<_>>()
         ));
     }
+
+    // Verify Ctrl+C (0x03) at the interactive prompt cancels the current input line without executing it
+    session.send_serial_input("echo SHOULD_NOT_RUN_ON_CTRL_C")?;
+    thread::sleep(Duration::from_millis(120));
+    session.send_serial_input("\x03")?;
+    thread::sleep(Duration::from_millis(120));
+    session.send_serial_input("echo AFTER_PROMPT_CTRL_C\n")?;
+    let mut prompt_ctrl_c_ok = false;
+    for _ in 0..25 {
+        thread::sleep(Duration::from_millis(60));
+        if session
+            .serial_lines()
+            .iter()
+            .any(|l| l.trim() == "AFTER_PROMPT_CTRL_C")
+        {
+            prompt_ctrl_c_ok = true;
+            break;
+        }
+    }
+    if !prompt_ctrl_c_ok
+        || session
+            .serial_lines()
+            .iter()
+            .any(|l| l.trim() == "SHOULD_NOT_RUN_ON_CTRL_C")
+    {
+        return Err(format!(
+            "[{}] Ctrl+C (0x03) at prompt did not cancel pending command line on ttyAMA0, lines={:?}",
+            board,
+            session.serial_lines().iter().rev().take(6).collect::<Vec<_>>()
+        ));
+    }
+
+    // Verify Ctrl+C (0x03 / SIGINT) interrupts a blocking foreground command (`sleep 30`)
+    session.send_serial_input("sleep 30\n")?;
+    thread::sleep(Duration::from_millis(180));
+    session.send_serial_input("\x03")?;
+    let mut ctrl_c_ok = false;
+    for _ in 0..25 {
+        thread::sleep(Duration::from_millis(60));
+        let snap = session.serial_snapshot();
+        if snap.active_line.contains(&expected_root_prompt) && !snap.active_line.contains("sleep") {
+            ctrl_c_ok = true;
+            break;
+        }
+    }
+    if !ctrl_c_ok {
+        return Err(format!(
+            "[{}] Ctrl+C (0x03 / SIGINT) did not interrupt foreground `sleep 30` on ttyAMA0, active_line='{}'",
+            board,
+            session.serial_snapshot().active_line
+        ));
+    }
+
+    // Verify Ctrl+C (0x03) exits full-screen raw-mode `top`
+    session.send_serial_input("top\n")?;
+    thread::sleep(Duration::from_millis(250));
+    session.send_serial_input("\x03")?;
+    let mut top_ctrl_c_ok = false;
+    for _ in 0..25 {
+        thread::sleep(Duration::from_millis(60));
+        let snap = session.serial_snapshot();
+        if snap.active_line.contains(&expected_root_prompt) && !snap.active_line.contains("top") {
+            top_ctrl_c_ok = true;
+            break;
+        }
+    }
+    if !top_ctrl_c_ok {
+        return Err(format!(
+            "[{}] Ctrl+C (0x03) did not exit foreground `top` on ttyAMA0, active_line='{}'",
+            board,
+            session.serial_snapshot().active_line
+        ));
+    }
+
+    // Verify Ctrl+D (0x04 / VEOF) terminates a foreground stdin reader (`cat`)
+    session.send_serial_input("cat\n")?;
+    thread::sleep(Duration::from_millis(180));
+    session.send_serial_input("\x04")?;
+    let mut ctrl_d_ok = false;
+    for _ in 0..25 {
+        thread::sleep(Duration::from_millis(60));
+        let snap = session.serial_snapshot();
+        if snap.active_line.contains(&expected_root_prompt) && !snap.active_line.contains("cat") {
+            ctrl_d_ok = true;
+            break;
+        }
+    }
+    if !ctrl_d_ok {
+        return Err(format!(
+            "[{}] Ctrl+D (0x04 / EOF) did not terminate foreground `cat` on ttyAMA0, active_line='{}'",
+            board,
+            session.serial_snapshot().active_line
+        ));
+    }
+
     if session
         .serial_lines()
         .iter()
@@ -1006,7 +1151,7 @@ fn verify_native_serial_shell(board: &str, session: &EmulatorSession) -> Result<
         ));
     }
     println!(
-        "[{}] Native /bin/sh on ttyAMA0 (setsid/TIOCSCTTY, live prompt & Tab completion) verified!",
+        "[{}] Native /bin/sh on ttyAMA0 (setsid/TIOCSCTTY, Ctrl+C/Ctrl+D, live prompt & Tab completion) verified!",
         board
     );
     Ok(())
@@ -1065,6 +1210,9 @@ pub fn run_board_verification(
         verify_buttons_and_volume(board, &bridge, &adb)?;
         verify_segment_clock_and_aux_logo(board, &meta, &bridge, &adb)?;
 
+        if board == "bergamot" {
+            verify_bergamot_peripherals(board, &adb)?;
+        }
         if board == "mango" {
             verify_mango_peripherals(board, &adb)?;
         }

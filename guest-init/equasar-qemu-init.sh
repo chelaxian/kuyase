@@ -235,7 +235,9 @@ rm -f /etc/shadow 2>/dev/null || true
 # 4. Start ADB daemon (TCP :5555)
 rm -rf /dev/usb-ffs 2>/dev/null || true
 if [ -x /usr/bin/adbd ]; then
+  set -m
   /usr/bin/adbd </dev/null >/tmp/adbd.log 2>&1 &
+  set +m
 fi
 
 # 5. Spoof /proc/device-tree (`model` & `compatible`) and /sys/devices/virtual/dmi/id via bind/tmpfs
@@ -797,7 +799,9 @@ if [ -x /data/qemu-hw-bridge ]; then
   cp -f /data/qemu-hw-bridge /usr/local/bin/qemu-hw-bridge 2>/dev/null || true
   chmod 0755 /usr/local/bin/qemu-hw-bridge 2>/dev/null || true
 fi
-/usr/local/bin/qemu-hw-bridge >/tmp/hw-bridge.log 2>&1 &
+set -m
+/usr/local/bin/qemu-hw-bridge </dev/null >/tmp/hw-bridge.log 2>&1 &
+set +m
 sleep 0.4
 
 # 11. Run any user-installed /etc/init.d/S99* startup scripts (skipping firmware S99onboot.sh / S99zdropbear)
