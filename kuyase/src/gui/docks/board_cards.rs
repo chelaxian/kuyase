@@ -453,33 +453,24 @@ fn render_station2_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
                     ));
                 }
             }
-            if ui
-                .add_enabled(vm_on, egui::Button::new("DSP: SY6045S"))
-                .on_hover_text(
-                    "Записать профиль sy6045s-settings.txt в /tmp/amp_settings_file и /sys/bus/i2c/drivers/sy6045s/1-002a/settings_file",
-                )
-                .clicked()
-            {
-                app.send_serial_command(
-                    "echo sy6045s-settings.txt > /tmp/amp_settings_file; \
-                     echo sy6045s-settings.txt > /sys/bus/i2c/drivers/sy6045s/1-002a/settings_file; \
-                     echo sy6045s-settings.txt > /sys/bus/i2c/devices/1-002a/settings_file; \
-                     echo sy6045s > /sys/bus/i2c/devices/1-002a/name",
-                );
-            }
-            if ui
-                .add_enabled(vm_on, egui::Button::new("DSP: TAS5825M"))
-                .on_hover_text(
-                    "Записать профиль tas5825m.txt в /tmp/amp_settings_file и /sys/bus/i2c/drivers/tas5825m/1-002a/settings_file",
-                )
-                .clicked()
-            {
-                app.send_serial_command(
-                    "echo tas5825m.txt > /tmp/amp_settings_file; \
-                     echo tas5825m.txt > /sys/bus/i2c/drivers/tas5825m/1-002a/settings_file; \
-                     echo tas5825m.txt > /sys/bus/i2c/devices/1-002a/settings_file; \
-                     echo tas5825m > /sys/bus/i2c/devices/1-002a/name",
-                );
+            for (lbl, chip, settings_file) in [
+                ("DSP: SY6045S", "sy6045s", "sy6045s-settings.txt"),
+                ("DSP: TAS5825M", "tas5825m", "tas5825m.txt"),
+            ] {
+                if ui
+                    .add_enabled(vm_on, egui::Button::new(lbl))
+                    .on_hover_text(format!(
+                        "Записать профиль {settings_file} в /tmp/amp_settings_file и /sys/bus/i2c/drivers/{chip}/1-002a/settings_file"
+                    ))
+                    .clicked()
+                {
+                    app.send_serial_command(&format!(
+                        "echo {settings_file} > /tmp/amp_settings_file; \
+                         echo {settings_file} > /sys/bus/i2c/drivers/{chip}/1-002a/settings_file; \
+                         echo {settings_file} > /sys/bus/i2c/devices/1-002a/settings_file; \
+                         echo {chip} > /sys/bus/i2c/devices/1-002a/name"
+                    ));
+                }
             }
             if ui
                 .add_enabled(

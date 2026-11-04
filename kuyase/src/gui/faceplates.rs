@@ -4,7 +4,8 @@ use crate::gui::display_geom::{
     clock_special_positions, format_station2_frame_command, hit_test_clock_segment_for_board,
     hit_test_matrix_pixel, hit_test_station2_faceplate_pixel, mango_battery_led_rgb,
     matrix_inspector_text, scale_rgb_brightness, station2_faceplate_layout,
-    station2_faceplate_pixel_center, station2_panel_inspector_text,
+    station2_faceplate_pixel_center, station2_panel_inspector_text, STATION2_PANEL_COLS,
+    STATION2_PANEL_LEDS, STATION2_PANEL_ROWS,
 };
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
@@ -746,9 +747,9 @@ fn apply_station2_preset(app: &mut GuiAppState, st: &mut BridgeStateSnapshot, pr
 }
 
 fn build_station2_show_preview_frame(pat_id: &str, brightness: u8) -> Vec<[u8; 3]> {
-    let mut out = Vec::with_capacity(88);
-    for row in 0..8usize {
-        for col in 0..11usize {
+    let mut out = Vec::with_capacity(STATION2_PANEL_LEDS);
+    for row in 0..STATION2_PANEL_ROWS {
+        for col in 0..STATION2_PANEL_COLS {
             let tx = (col as f32) / 10.0;
             let ty = (row as f32) / 7.0;
             let base = match pat_id {
@@ -837,21 +838,28 @@ pub fn render_station2_light_panel_faceplate(
         );
     });
 
-    if app.station2_custom_pixels.len() < 88 {
-        app.station2_custom_pixels
-            .resize(88, scale_rgb_brightness(app.station2_brush_rgb, app.clock_brightness));
+    if app.station2_custom_pixels.len() < STATION2_PANEL_LEDS {
+        app.station2_custom_pixels.resize(
+            STATION2_PANEL_LEDS,
+            scale_rgb_brightness(app.station2_brush_rgb, app.clock_brightness),
+        );
     }
-    if app.station2_base_pixels.len() < 88 {
+    if app.station2_base_pixels.len() < STATION2_PANEL_LEDS {
         app.station2_base_pixels
-            .resize(88, app.station2_brush_rgb);
+            .resize(STATION2_PANEL_LEDS, app.station2_brush_rgb);
     }
 
-    if bridge_online && st.ring_pixels.len() >= 88 && !st.forced_led_pattern.starts_with("frame:") {
-        app.station2_custom_pixels.truncate(88);
-        app.station2_base_pixels.truncate(88);
-        app.station2_custom_pixels.copy_from_slice(&st.ring_pixels[..88]);
-        app.station2_base_pixels.copy_from_slice(&st.ring_pixels[..88]);
-    } else if !bridge_online && st.ring_pixels.len() < 88 {
+    if bridge_online
+        && st.ring_pixels.len() >= STATION2_PANEL_LEDS
+        && !st.forced_led_pattern.starts_with("frame:")
+    {
+        app.station2_custom_pixels.truncate(STATION2_PANEL_LEDS);
+        app.station2_base_pixels.truncate(STATION2_PANEL_LEDS);
+        app.station2_custom_pixels
+            .copy_from_slice(&st.ring_pixels[..STATION2_PANEL_LEDS]);
+        app.station2_base_pixels
+            .copy_from_slice(&st.ring_pixels[..STATION2_PANEL_LEDS]);
+    } else if !bridge_online && st.ring_pixels.len() < STATION2_PANEL_LEDS {
         st.ring_pixels = app.station2_custom_pixels.clone();
     }
 
@@ -942,6 +950,26 @@ pub fn render_station2_light_panel_faceplate(
         ],
         icon_stroke,
     );
+    painter.text(
+        Pos2::new(
+            (layout.minus_pos.x + layout.action_pos.x) * 0.5,
+            layout.strip_rect.center().y,
+        ),
+        egui::Align2::CENTER_CENTER,
+        "ВЕРХ КРЫШКИ",
+        egui::FontId::monospace(8.5),
+        Color32::from_rgb(108, 122, 144),
+    );
+    painter.text(
+        Pos2::new(
+            (layout.action_pos.x + layout.plus_pos.x) * 0.5,
+            layout.strip_rect.center().y,
+        ),
+        egui::Align2::CENTER_CENTER,
+        "ВИД СВЕРХУ",
+        egui::FontId::monospace(8.5),
+        Color32::from_rgb(108, 122, 144),
+    );
 
     // Крупная световая панель 11×8 (88 RGBW LED, /dev/fb0) под сенсорной планкой
     painter.rect_filled(layout.panel_rect, 6.0, Color32::from_rgb(11, 14, 19));
@@ -952,9 +980,9 @@ pub fn render_station2_light_panel_faceplate(
     );
 
     let dot_r = (layout.cell_size * 0.30).clamp(4.0, 5.2);
-    for row in 0..8usize {
-        for col in 0..11usize {
-            let idx = row * 11 + col;
+    for row in 0..STATION2_PANEL_ROWS {
+        for col in 0..STATION2_PANEL_COLS {
+            let idx = row * STATION2_PANEL_COLS + col;
             let rgb = app
                 .station2_custom_pixels
                 .get(idx)
@@ -986,7 +1014,7 @@ pub fn render_station2_light_panel_faceplate(
         ui.label(RichText::new("Кисть:").small());
         ui.color_edit_button_srgb(&mut app.station2_brush_rgb);
         for (lbl, swatch_rgb, hex_code) in [
-            ("Фиолетовый", [0x6B, 0x0F, 0xFF], "#6B0FFF"),
+            ("Фиолетовый Алисы", [0x6B, 0x0F, 0xFF], "#6B0FFF"),
             ("Алиса Про", [0x00, 0xFF, 0x80], "#00FF80"),
             ("Бирюзовый", [0x00, 0xE5, 0xFF], "#00E5FF"),
             ("Свеча", [0xFF, 0x99, 0x33], "#FF9933"),
@@ -1036,7 +1064,7 @@ pub fn render_station2_light_panel_faceplate(
             .add(egui::Slider::new(&mut app.clock_brightness, 0..=255))
             .changed()
         {
-            for idx in 0..88 {
+            for idx in 0..STATION2_PANEL_LEDS {
                 let base = app
                     .station2_base_pixels
                     .get(idx)

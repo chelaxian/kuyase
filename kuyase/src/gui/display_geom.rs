@@ -198,8 +198,9 @@ pub fn cucumber_ring_led_pos(center: Pos2, outer_r: f32, idx: usize, count: usiz
     squircle_ring_position(center, body_half * 0.86, corner_r * 0.85, idx, count)
 }
 
-const STATION2_PANEL_COLS: usize = 11;
-const STATION2_PANEL_ROWS: usize = 8;
+pub const STATION2_PANEL_COLS: usize = 11;
+pub const STATION2_PANEL_ROWS: usize = 8;
+pub const STATION2_PANEL_LEDS: usize = STATION2_PANEL_COLS * STATION2_PANEL_ROWS;
 const STATION2_PANEL_PAD_X: f32 = 9.0;
 const STATION2_PANEL_PAD_Y: f32 = 8.0;
 
