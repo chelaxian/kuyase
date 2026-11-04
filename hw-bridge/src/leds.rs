@@ -51,7 +51,7 @@ pub fn parse_led_pattern_str(raw: &str, ring_leds: usize) -> Vec<(Vec<[u8; 3]>, 
     frames
 }
 
-pub fn load_led_pattern(kind: &str, ring_leds: usize) -> Vec<(Vec<[u8; 3]>, u32)> {
+fn load_led_pattern(kind: &str, ring_leds: usize) -> Vec<(Vec<[u8; 3]>, u32)> {
     let candidates = [
         format!("/system/vendor/quasar/ledpatterns/ring/{}.led", kind),
         format!("/system/vendor/quasar/ledpatterns/panel/{}.led", kind),
@@ -94,7 +94,7 @@ pub fn load_led_pattern(kind: &str, ring_leds: usize) -> Vec<(Vec<[u8; 3]>, u32)
     fallback
 }
 
-pub fn load_ambilight_pattern(kind: &str, zones: usize) -> Vec<(Vec<[u8; 3]>, u32)> {
+fn load_ambilight_pattern(kind: &str, zones: usize) -> Vec<(Vec<[u8; 3]>, u32)> {
     if zones == 0 {
         return Vec::new();
     }
@@ -105,7 +105,6 @@ pub fn load_ambilight_pattern(kind: &str, zones: usize) -> Vec<(Vec<[u8; 3]>, u3
         format!("/system/vendor/quasar/ledpatterns/ambilight/{}.led", kind),
         "/system/vendor/quasar/ledpatterns/oknix/alice_speaking.led".to_string(),
         "/system/vendor/quasar/ledpatterns/oknix/boot.led".to_string(),
-        "/system/vendor/quasar/ledpatterns/ambilight/violet.led".to_string(),
         "/system/vendor/quasar/ledpatterns/ambilight/boot.led".to_string(),
     ];
     for path in &candidates {
@@ -119,7 +118,7 @@ pub fn load_ambilight_pattern(kind: &str, zones: usize) -> Vec<(Vec<[u8; 3]>, u3
     vec![(vec![[107, 15, 255]; zones], 40)]
 }
 
-pub fn build_volume_led_frame(
+fn build_volume_led_frame(
     volume_frames: &[(Vec<[u8; 3]>, u32)],
     vol_level: u32,
     ring_leds: usize,
@@ -152,7 +151,7 @@ pub fn build_volume_led_frame(
     px
 }
 
-pub fn parse_rgb_hex_pattern(forced: &str) -> Option<[u8; 3]> {
+fn parse_rgb_hex_pattern(forced: &str) -> Option<[u8; 3]> {
     let hex = forced.strip_prefix("rgb:")?;
     let clean = hex.trim_start_matches('#');
     let rgb = u32::from_str_radix(clean, 16).unwrap_or(0);
@@ -231,8 +230,7 @@ pub fn sync_immediate_led_state(state: &BridgeState) {
         return;
     }
 
-    if state.alice_state() == AliceState::Idle && state.forced_led_pattern.lock().unwrap().is_empty()
-    {
+    if state.alice_state() == AliceState::Idle {
         let aux_had_native = state
             .native_aux_frame
             .lock()
@@ -340,9 +338,9 @@ pub fn spawn_native_led_animator(state: Arc<BridgeState>) {
 
             // 3. Активный диалог Алисы (LISTENING / SPEAKING)
             match state.alice_state() {
-                AliceState::Listening | AliceState::Speaking => {
+                alice_state @ (AliceState::Listening | AliceState::Speaking) => {
                     was_active = true;
-                    let frames = if state.alice_state() == AliceState::Listening {
+                    let frames = if alice_state == AliceState::Listening {
                         &listening_frames
                     } else {
                         &speaking_frames
