@@ -8,7 +8,7 @@
 - [CONTEXT.md](./CONTEXT.md): Canonical domain glossary (`Board Profile`, `Board Peripherals`, `Firmware Dump`, `Guest Image`, `Hardware Bridge`, `Virtual Speaker Twin`, `Register Latch`, `Stealth Lock`, `Trigger Conflict`, `Hijack Window`, `Formant TTS Synthesizer`).
 - [protocol/src/lib.rs](./protocol/src/lib.rs), [protocol/src/boards.rs](./protocol/src/boards.rs), [protocol/src/display.rs](./protocol/src/display.rs): Duplex TCP bridge protocol contracts (`[u8 kind][u32_le len][payload]` on `:8091` / `:18091`), `BridgeStateSnapshot`, `HostCommand`, `GuestPacket`, canonical `BOARD_CATALOG` (`BoardDescriptor`), and shared 7-segment / `21×12` matrix display rendering.
 - [DUMP_GUIDE.md](./DUMP_GUIDE.md): Extracting clean `rootfs.tar.gz` dumps over network ADB (`:5555`) via standalone scripts (`scripts/dump-from-adb.sh` / `.ps1`), manual `adb`, or `kuyase dump`, and building `.ext4` images in userspace via `kuyase prepare`.
-- [examples/README.md](./examples/README.md): Minimal Python multi-board headless test runner example (`test_yam_lineup.py`).
+- [tests_e2e/README.md](./tests_e2e/README.md): End-to-end smoke test suite (`yam`, `luna`, `station.airplay`, and `/system/vendor/quasar/q`).
 - [AGENTS.md](./AGENTS.md): Agent workflow rules, cross-compilation/injection pipeline, and hardware emulation invariants.
 
 ## Repository Layout (3-Crate Cargo Workspace)
@@ -48,7 +48,6 @@
 - `schemas/quasar/quasar.proto`: Canonical multi-generation `.proto` schema definitions for `QuasarMessage`, `Remoting`, `AliceState`, `IOControlCommand`, and `GlagoldState`.
 - `tests_e2e/`: End-to-end smoke suite (`harness.py`, `test_01_yam.py`, `test_02_luna.py`, `test_03_airplay.py`, `test_04_quasar_q.py`) verifying real `yam`, `luna`, `station.airplay` installers and unmodified `/system/vendor/quasar/q` commands via `kuyase run --headless --board <board> --snapshot --exec`.
 - `scripts/`: Standalone dump extraction and sanitization scripts (`dump-from-adb.sh`, `dump-from-adb.ps1`, `sanitize-rootfs.sh`, `sanitize-rootfs.ps1`) and Protobuf Rust module generator (`gen_quasar_proto.py` from `schemas/quasar/quasar.proto`).
-- `examples/`: Minimal Python multi-board test runner (`test_yam_lineup.py`) demonstrating `kuyase run --headless --board all --snapshot --exec`.
 - `guest-init/equasar-qemu-init.sh`: Guest `PID 1` (`/quasar-qemu-init.sh`) that mounts virtual filesystems, spoofs `/proc/device-tree`, synthesizes `/sys/class/leds/*`, `/sys/class/graphics/fb0..2`, `/sys/bus/i2c/devices/*`, `/sys/class/power_supply/ya_pd`, and ALSA devices (`pcm.speakers`, `pcm.ultrasound`, `pcm.bluetooth`), starts `/usr/bin/adbd` (`:5555`), and launches `/usr/local/bin/qemu-hw-bridge`.
 - `kernel/build-kernel.sh`: Builds Linux `6.6.60` `arm64` (`kernel/Image`) with `CONFIG_COMPAT=y`, `snd-aloop`, `uinput`, patched `drivers/i2c/i2c-stub.c`, and 3-framebuffer `drivers/video/fbdev/vfb.c` (`fb0`, `fb1`, `fb2`).
 

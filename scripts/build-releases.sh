@@ -46,18 +46,17 @@ cp -f Releases/kuyase-kernel-arm64.img kernel/Image
 echo "=== [3/4] Упаковка Releases/kuyase-linux64-portable.tar.gz ==="
 STAGE_LINUX="$(mktemp -d)"
 trap 'rm -rf "${STAGE_LINUX}"' EXIT
-mkdir -p "${STAGE_LINUX}/examples" "${STAGE_LINUX}/scripts"
+mkdir -p "${STAGE_LINUX}/scripts"
 cp -f Releases/kuyase "${STAGE_LINUX}/kuyase"
 cp -f Releases/kuyase-kernel-arm64.img "${STAGE_LINUX}/kuyase-kernel-arm64.img"
 cp -f Releases/qemu-hw-bridge "${STAGE_LINUX}/qemu-hw-bridge"
 chmod 0755 "${STAGE_LINUX}/kuyase" "${STAGE_LINUX}/qemu-hw-bridge"
 cp -f README.md DUMP_GUIDE.md "${STAGE_LINUX}/"
-cp -f examples/README.md examples/test_yam_lineup.py "${STAGE_LINUX}/examples/"
 cp -f scripts/dump-from-adb.sh scripts/dump-from-adb.ps1 scripts/sanitize-rootfs.sh scripts/sanitize-rootfs.ps1 "${STAGE_LINUX}/scripts/"
-chmod 0755 "${STAGE_LINUX}/scripts/"*.sh "${STAGE_LINUX}/examples/test_yam_lineup.py" 2>/dev/null || true
+chmod 0755 "${STAGE_LINUX}/scripts/"*.sh 2>/dev/null || true
 
 tar -czf Releases/kuyase-linux64-portable.tar.gz -C "${STAGE_LINUX}" \
-  kuyase kuyase-kernel-arm64.img qemu-hw-bridge README.md DUMP_GUIDE.md examples scripts
+  kuyase kuyase-kernel-arm64.img qemu-hw-bridge README.md DUMP_GUIDE.md scripts
 
 echo "=== [4/4] Генерация контрольных сумм Releases/SHA256SUMS.txt ==="
 (

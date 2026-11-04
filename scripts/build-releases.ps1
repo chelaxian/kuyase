@@ -50,7 +50,7 @@ Copy-Item -Force "Releases/kuyase-kernel-arm64.img" "kernel/Image"
 Write-Host "=== [3/4] Упаковка Releases/kuyase-win64-portable.zip ===" -ForegroundColor Cyan
 $StageWin = Join-Path ([System.IO.Path]::GetTempPath()) "kuyase-win64-stage-$PID"
 if (Test-Path $StageWin) { Remove-Item -Recurse -Force $StageWin }
-New-Item -ItemType Directory -Force -Path $StageWin, (Join-Path $StageWin "examples"), (Join-Path $StageWin "scripts") | Out-Null
+New-Item -ItemType Directory -Force -Path $StageWin, (Join-Path $StageWin "scripts") | Out-Null
 
 try {
     Copy-Item -Force "Releases/kuyase.exe" (Join-Path $StageWin "kuyase.exe")
@@ -58,8 +58,6 @@ try {
     Copy-Item -Force "Releases/qemu-hw-bridge" (Join-Path $StageWin "qemu-hw-bridge")
     Copy-Item -Force "README.md" (Join-Path $StageWin "README.md")
     Copy-Item -Force "DUMP_GUIDE.md" (Join-Path $StageWin "DUMP_GUIDE.md")
-    Copy-Item -Force "examples/README.md" (Join-Path $StageWin "examples/README.md")
-    Copy-Item -Force "examples/test_yam_lineup.py" (Join-Path $StageWin "examples/test_yam_lineup.py")
     Copy-Item -Force "scripts/dump-from-adb.ps1", "scripts/dump-from-adb.sh", "scripts/sanitize-rootfs.ps1", "scripts/sanitize-rootfs.sh" (Join-Path $StageWin "scripts/")
 
     $WinZip = Join-Path $RepoRoot "Releases/kuyase-win64-portable.zip"

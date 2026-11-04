@@ -123,7 +123,7 @@ kuyase test
 kuyase test --board yandexmini
 ```
 
-Демо-скрипт с примером автотеста пакетного менеджера для Яндекс Станций [`yam`](https://github.com/nyakokitsu/yam) по всей линейке колонок находится в каталоге [`examples/`](./examples/README.md).
+Сквозные E2E-тесты пакетного менеджера [`yam`](https://github.com/nyakokitsu/yam), веб-интерфейса [`luna`](https://github.com/nyakokitsu/luna), плагина [`station.airplay`](https://github.com/ryysel/Station-airplay) и утилит вендора находятся в каталоге [`tests_e2e/`](./tests_e2e/README.md).
 
 ### Сетевые порты виртуальной машины
 
