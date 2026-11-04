@@ -3,7 +3,7 @@ use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, RichText};
 use protocol::HostCommand;
 
-pub fn sensors_card_headers(board_slug: &str) -> (&'static str, &'static str) {
+fn board_sensor_capabilities(board_slug: &str) -> (bool, bool) {
     let norm = protocol::normalize_board_slug(board_slug);
     let desc = protocol::find_board_descriptor(&norm);
     let is_sn3236 = desc
@@ -12,6 +12,11 @@ pub fn sensors_card_headers(board_slug: &str) -> (&'static str, &'static str) {
     let has_ultrasound = desc
         .map(|d| d.has_ultrasound)
         .unwrap_or(norm == "orion");
+    (is_sn3236, has_ultrasound)
+}
+
+pub fn sensors_card_headers(board_slug: &str) -> (&'static str, &'static str) {
+    let (is_sn3236, has_ultrasound) = board_sensor_capabilities(board_slug);
 
     if is_sn3236 {
         (
@@ -38,14 +43,7 @@ pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
         .map(|s| s.board_slug.clone())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| app.config.selected_board.clone());
-    let desc = protocol::find_board_descriptor(&board_slug);
-    let is_sn3236 = desc
-        .map(|d| d.ring_driver == "i2c_sn3236")
-        .unwrap_or(board_slug == "yandexmini");
-    let has_ultrasound = desc
-        .map(|d| d.has_ultrasound)
-        .unwrap_or(board_slug == "orion");
-
+    let (is_sn3236, has_ultrasound) = board_sensor_capabilities(&board_slug);
     let (card_title, card_subtitle) = sensors_card_headers(&board_slug);
 
     gnome_preferences_group(ui, card_title, card_subtitle, |ui| {

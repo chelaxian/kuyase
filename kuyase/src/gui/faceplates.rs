@@ -9,7 +9,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use protocol::{BridgeStateSnapshot, HostCommand};
 use std::collections::BTreeMap;
 
-fn render_display_inspector_bar(ui: &mut egui::Ui, text: &str, is_active_hover: bool) {
+pub(crate) fn render_display_inspector_bar(ui: &mut egui::Ui, text: &str, is_active_hover: bool) {
     egui::Frame::none()
         .fill(Color32::from_rgb(16, 20, 27))
         .stroke(Stroke::new(
@@ -387,11 +387,7 @@ pub fn render_aux_logo_strip(
             }
 
             for (lbl, lit) in [("4/4", 4usize), ("3/4", 3usize), ("1/4", 1usize), ("0/4", 0usize)] {
-                if ui
-                    .small_button(lbl)
-                    .on_hover_text(format!("Зажечь {} из 4 светодиодов шкалы заряда (/dev/fb0)", lit))
-                    .clicked()
-                {
+                if ui.small_button(lbl).clicked() {
                     let mut px = vec![[0u8, 0, 0]; 4];
                     for item in px.iter_mut().take(lit) {
                         *item = [235, 245, 255];
@@ -454,11 +450,7 @@ pub fn render_aux_logo_strip(
                 [135, 35, 255],
             );
 
-            if ui
-                .small_button("Фиолетовый")
-                .on_hover_text("Записать фиолетовый цвет Алисы (#6B0FFF) в круговой логотип /dev/fb1")
-                .clicked()
-            {
+            if ui.small_button("Фиолетовый").clicked() {
                 let latest = app.latest_state.get_or_insert_with(|| st.clone());
                 latest.logo_pixels = vec![[0x6b, 0x0f, 0xff]; count];
                 if app.session.is_some() {
@@ -466,11 +458,7 @@ pub fn render_aux_logo_strip(
                     app.send_serial_command(&format!("printf '{}' > /dev/fb1", hex_rep));
                 }
             }
-            if ui
-                .small_button("Бирюзовый")
-                .on_hover_text("Записать бирюзовый цвет (#22CCFF) в круговой логотип /dev/fb1")
-                .clicked()
-            {
+            if ui.small_button("Бирюзовый").clicked() {
                 let latest = app.latest_state.get_or_insert_with(|| st.clone());
                 latest.logo_pixels = vec![[0x22, 0xcc, 0xff]; count];
                 if app.session.is_some() {
@@ -478,11 +466,7 @@ pub fn render_aux_logo_strip(
                     app.send_serial_command(&format!("printf '{}' > /dev/fb1", hex_rep));
                 }
             }
-            if ui
-                .small_button("Алиса Про")
-                .on_hover_text("Записать градиент Алисы Про (#00FF80 + #6B0FFF) в круговой логотип /dev/fb1")
-                .clicked()
-            {
+            if ui.small_button("Алиса Про").clicked() {
                 let mut grad = Vec::with_capacity(count);
                 let mut hex_rep = String::new();
                 for i in 0..count {
@@ -500,11 +484,7 @@ pub fn render_aux_logo_strip(
                     app.send_serial_command(&format!("printf '{}' > /dev/fb1", hex_rep));
                 }
             }
-            if ui
-                .small_button("Погасить")
-                .on_hover_text("Очистить /dev/fb1 и сбросить яркость logo0..N в sysfs в 0")
-                .clicked()
-            {
+            if ui.small_button("Погасить").clicked() {
                 let latest = app.latest_state.get_or_insert_with(|| st.clone());
                 latest.logo_pixels = vec![[0, 0, 0]; count];
                 if app.session.is_some() {

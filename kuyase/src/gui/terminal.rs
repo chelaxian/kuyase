@@ -65,6 +65,14 @@ const SERIAL_SNIPPETS: &[(&str, &str)] = &[
 
 const TTY_TERM_FOCUS_ID: &str = "tty_ama0_native_terminal";
 
+fn active_board_slug(app: &GuiAppState) -> String {
+    app.latest_state
+        .as_ref()
+        .map(|s| s.board_slug.clone())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| app.config.selected_board.clone())
+}
+
 pub fn render_bottom_dock(ui: &mut egui::Ui, app: &mut GuiAppState) {
     ui.horizontal_wrapped(|ui| {
         let collapse_label = if app.config.dock_collapsed {
@@ -133,12 +141,7 @@ pub fn render_bottom_dock(ui: &mut egui::Ui, app: &mut GuiAppState) {
         if !app.config.dock_collapsed {
             ui.separator();
             if app.config.active_terminal_tab == "signals" {
-                let board_slug = app
-                    .latest_state
-                    .as_ref()
-                    .map(|s| s.board_slug.clone())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| app.config.selected_board.clone());
+                let board_slug = active_board_slug(app);
                 for flt in [
                     SignalFilter::All,
                     SignalFilter::TofButtons,
@@ -242,12 +245,7 @@ pub fn render_bottom_dock(ui: &mut egui::Ui, app: &mut GuiAppState) {
 }
 
 fn render_signal_log_tab(ui: &mut egui::Ui, app: &mut GuiAppState) {
-    let board_slug = app
-        .latest_state
-        .as_ref()
-        .map(|s| s.board_slug.clone())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| app.config.selected_board.clone());
+    let board_slug = active_board_slug(app);
     let entries = app.filtered_signals();
     let avail_h = ui.available_height().max(60.0);
 

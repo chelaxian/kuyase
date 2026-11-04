@@ -272,25 +272,19 @@ pub fn hit_test_enclosure_target(
     }
 
     let norm = protocol::normalize_board_slug(board_slug);
+    for (btn, pos, hit_r) in enclosure_button_targets(&norm, rect) {
+        if pointer.distance(pos) <= hit_r {
+            return Some(EnclosureHitTarget::Button(btn));
+        }
+    }
+
     if board_enclosure_shape(&norm) == EnclosureShape::CylinderPortable {
         let m = mango_enclosure_layout(rect);
         if pointer.distance(m.bt_pos) <= 13.0 {
             return Some(EnclosureHitTarget::MangoBluetooth);
         }
-        if pointer.distance(m.minus_pos) <= 13.0 {
-            return Some(EnclosureHitTarget::Button("volume_down"));
-        }
-        if pointer.distance(m.action_pos) <= 16.0 {
-            return Some(EnclosureHitTarget::Button("action"));
-        }
-        if pointer.distance(m.plus_pos) <= 13.0 {
-            return Some(EnclosureHitTarget::Button("volume_up"));
-        }
         if pointer.distance(m.next_pos) <= 13.0 {
             return Some(EnclosureHitTarget::MangoNextTrack);
-        }
-        if pointer.distance(m.mute_pos) <= 12.0 {
-            return Some(EnclosureHitTarget::Button("mute"));
         }
         if m.usbc_rect.expand(4.0).contains(pointer) || pointer.distance(m.usbc_pos) <= 12.0 {
             return Some(EnclosureHitTarget::MangoUsbCPd);
@@ -305,13 +299,6 @@ pub fn hit_test_enclosure_target(
         return None;
     }
 
-    for (btn, pos, hit_r) in enclosure_button_targets(board_slug, rect) {
-        if pointer.distance(pos) <= hit_r {
-            return Some(EnclosureHitTarget::Button(btn));
-        }
-    }
-
-    let norm = protocol::normalize_board_slug(board_slug);
     let layout = circle_enclosure_layout(&norm, rect);
     let dist = pointer.distance(layout.center);
     let doa_min_r = match board_enclosure_shape(&norm) {
@@ -326,6 +313,216 @@ pub fn hit_test_enclosure_target(
     }
 
     None
+}
+
+/// Возвращает строку-инспектор верхнего холста корпуса и флаг активности ховера (`true`, если курсор
+/// наведён на кнопку, компас DOA, порт, светодиод кольца/Ambilight/матрицы 11×8 или датчик).
+pub fn enclosure_hover_inspector_text(
+    board_slug: &str,
+    rect: Rect,
+    pointer: Option<Pos2>,
+    st: &BridgeStateSnapshot,
+    press_mode: &str,
+) -> (String, bool) {
+    let norm = protocol::normalize_board_slug(board_slug);
+    let Some(ptr) = pointer.filter(|&p| rect.contains(p)) else {
+        return (enclosure_inspector_text(&norm, st, None, press_mode), false);
+    };
+
+    if let Some(target) = hit_test_enclosure_target(&norm, rect, ptr) {
+        return (
+            enclosure_inspector_text(&norm, st, Some(target), press_mode),
+            true,
+        );
+    }
+
+    let layout = circle_enclosure_layout(&norm, rect);
+    let center = layout.center;
+    let outer_r = layout.outer_r;
+    let prefix = protocol::find_board_descriptor(&norm)
+        .map(|d| d.sysfs_prefix)
+        .unwrap_or(norm.as_str());
+
+    match norm.as_str() {
+        "orion" => {
+            let ambi_half = outer_r * 0.86;
+            let ambi_corner_r = ambi_half * 0.30;
+            for idx in 0..12 {
+                let pos = squircle_ring_position(
+                    center,
+                    ambi_half * 0.90,
+                    ambi_corner_r * 0.90,
+                    idx,
+                    12,
+                );
+                if ptr.distance(pos) <= 7.5 {
+                    let [r, g, b] = st.logo_pixels.get(idx).copied().unwrap_or([110, 45, 220]);
+                    return (
+                        format!(
+                            "Зона Ambilight #{idx} (orion:*:ambilight{idx}a/b, /dev/fb0) | RGB({r}, {g}, {b})"
+                        ),
+                        true,
+                    );
+                }
+            }
+            let cap_half = outer_r * 0.66;
+            let cap_corner_r = cap_half * 0.28;
+            for idx in 0..36 {
+                let pos = squircle_ring_position(
+                    center,
+                    cap_half * 0.88,
+                    cap_corner_r * 0.88,
+                    idx,
+                    36,
+                );
+                if ptr.distance(pos) <= 6.5 {
+                    let [r, g, b] = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
+                    return (
+                        format!(
+                            "Светодиод кольца #{idx} (orion:*:ring{idx}, /dev/fb2) | RGB({r}, {g}, {b})"
+                        ),
+                        true,
+                    );
+                }
+            }
+        }
+        "cucumber" => {
+            let body_half = outer_r * 0.82;
+            let body_corner_r = body_half * 0.30;
+            for idx in 0..24 {
+                let pos = squircle_ring_position(
+                    center,
+                    body_half * 0.87,
+                    body_corner_r * 0.87,
+                    idx,
+                    24,
+                );
+                if ptr.distance(pos) <= 7.0 {
+                    let [r, g, b] = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
+                    return (
+                        format!(
+                            "Светодиод кольца #{idx} (cucumber:*:ring{idx}, /dev/fb0) | RGB({r}, {g}, {b})"
+                        ),
+                        true,
+                    );
+                }
+            }
+        }
+        "station2" => {
+            let half_w = outer_r * 0.80;
+            let half_h = outer_r * 0.68;
+            let body_rect = Rect::from_center_size(
+                center,
+                eframe::egui::Vec2::new(half_w * 2.0, half_h * 2.0),
+            );
+            let grid_top = body_rect.top() + 34.0;
+            let grid_bottom = body_rect.bottom() - 10.0;
+            let grid_left = body_rect.left() + 12.0;
+            let grid_right = body_rect.right() - 12.0;
+            let grid_rect = Rect::from_min_max(
+                Pos2::new(grid_left, grid_top),
+                Pos2::new(grid_right, grid_bottom),
+            );
+            if grid_rect.contains(ptr) {
+                let cols = 11usize;
+                let rows = 8usize;
+                let col = (((ptr.x - grid_rect.left()) / grid_rect.width()) * (cols as f32))
+                    .floor()
+                    .clamp(0.0, (cols - 1) as f32) as usize;
+                let row = (((ptr.y - grid_rect.top()) / grid_rect.height()) * (rows as f32))
+                    .floor()
+                    .clamp(0.0, (rows - 1) as f32) as usize;
+                let idx = row * cols + col;
+                let [r, g, b] = st.ring_pixels.get(idx).copied().unwrap_or([95, 45, 220]);
+                return (
+                    format!(
+                        "Световая панель 11×8 [{col}, {row}] (LED #{idx}, station2:*:ring{idx}, /dev/fb0) | RGB({r}, {g}, {b})"
+                    ),
+                    true,
+                );
+            }
+        }
+        "pickle" => {
+            for idx in 0..16 {
+                let pos = led_ring_position(center, layout.ring_r, idx, 16);
+                if ptr.distance(pos) <= 7.5 {
+                    let [r, g, b] = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
+                    return (
+                        format!(
+                            "Светодиод обода #{idx} (pickle:*:ring{idx}, /dev/fb0) | RGB({r}, {g}, {b})"
+                        ),
+                        true,
+                    );
+                }
+            }
+        }
+        "yandexmini" => {
+            if ptr.distance(center) <= outer_r * 0.26 {
+                return (
+                    format!(
+                        "Окно лазерного дальномера ToF (STM VL53L0X) | Дистанция: {} мм",
+                        st.tof_mm
+                    ),
+                    true,
+                );
+            }
+            for idx in 0..6 {
+                let pos = led_ring_position(center, layout.ring_r, idx, 6);
+                if ptr.distance(pos) <= 8.5 {
+                    let [r, g, b] = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
+                    return (
+                        format!(
+                            "Светодиод SN3236 #{idx} (I2C 0x3c, BGR + защёлка 0x25) | RGB({r}, {g}, {b})"
+                        ),
+                        true,
+                    );
+                }
+            }
+        }
+        "yandexmicro" | "plum" | "plumnc" => {
+            for idx in 0..3 {
+                let pos = led_ring_position(center, layout.ring_r, idx, 3);
+                if ptr.distance(pos) <= 8.0 {
+                    let [r, g, b] = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
+                    return (
+                        format!(
+                            "Светодиод кластера #{idx} ({prefix}:*:ring{idx}, sysfs) | RGB({r}, {g}, {b})"
+                        ),
+                        true,
+                    );
+                }
+            }
+        }
+        "mango" => {
+            let m = mango_enclosure_layout(rect);
+            if ptr.distance(m.power_pos) <= 10.5 {
+                return (
+                    "Индикатор кнопки питания Power (mango, PMIC / GPIO)".to_string(),
+                    true,
+                );
+            }
+            for (idx, &pos) in m.batt_led_positions.iter().enumerate() {
+                if ptr.distance(pos) <= 6.8 {
+                    let default_batt = if idx < 3 {
+                        [215, 232, 255]
+                    } else {
+                        [0, 0, 0]
+                    };
+                    let [r, g, b] = st.ring_pixels.get(idx).copied().unwrap_or(default_batt);
+                    let ring_num = idx + 1;
+                    return (
+                        format!(
+                            "Шкала заряда АКБ #{ring_num}/4 (mango:*:ring{ring_num}, AW9110 /dev/fb0) | RGB({r}, {g}, {b})"
+                        ),
+                        true,
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+
+    (enclosure_inspector_text(&norm, st, None, press_mode), false)
 }
 
 pub fn enclosure_inspector_text(
@@ -1272,5 +1469,100 @@ mod tests {
                 && usbc_txt.contains("CW2217")
                 && usbc_txt.contains("AW9110")
         );
+    }
+
+    #[test]
+    fn test_enclosure_hover_inspector_for_leds_ambilight_matrix_and_tof() {
+        let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(320.0, 252.0));
+        let mut st = BridgeStateSnapshot::default();
+        st.tof_mm = 210;
+
+        // 1. orion: Ambilight zone 0 & LED Ring diode 0
+        {
+            let layout = circle_enclosure_layout("orion", rect);
+            let ambi_half = layout.outer_r * 0.86;
+            let ambi_pos = squircle_ring_position(
+                layout.center,
+                ambi_half * 0.90,
+                ambi_half * 0.30 * 0.90,
+                0,
+                12,
+            );
+            let (txt, active) =
+                enclosure_hover_inspector_text("orion", rect, Some(ambi_pos), &st, "single");
+            assert!(active && txt.contains("Ambilight #0") && txt.contains("/dev/fb0"));
+
+            let cap_half = layout.outer_r * 0.66;
+            let ring_pos = squircle_ring_position(
+                layout.center,
+                cap_half * 0.88,
+                cap_half * 0.28 * 0.88,
+                0,
+                36,
+            );
+            let (txt_r, active_r) =
+                enclosure_hover_inspector_text("orion", rect, Some(ring_pos), &st, "single");
+            assert!(active_r && txt_r.contains("orion:*:ring0") && txt_r.contains("/dev/fb2"));
+        }
+
+        // 2. cucumber: LED Ring diode 0
+        {
+            let layout = circle_enclosure_layout("cucumber", rect);
+            let body_half = layout.outer_r * 0.82;
+            let ring_pos = squircle_ring_position(
+                layout.center,
+                body_half * 0.87,
+                body_half * 0.30 * 0.87,
+                0,
+                24,
+            );
+            let (txt, active) =
+                enclosure_hover_inspector_text("cucumber", rect, Some(ring_pos), &st, "single");
+            assert!(active && txt.contains("cucumber:*:ring0") && txt.contains("/dev/fb0"));
+        }
+
+        // 3. station2: 11x8 light panel center pixel
+        {
+            let layout = circle_enclosure_layout("station2", rect);
+            let panel_pt = Pos2::new(layout.center.x, layout.center.y + 12.0);
+            let (txt, active) =
+                enclosure_hover_inspector_text("station2", rect, Some(panel_pt), &st, "single");
+            assert!(active && txt.contains("11×8") && txt.contains("/dev/fb0"));
+        }
+
+        // 4. yandexmini: central ToF window and SN3236 LED 0
+        {
+            let layout = circle_enclosure_layout("yandexmini", rect);
+            let (tof_txt, tof_act) = enclosure_hover_inspector_text(
+                "yandexmini",
+                rect,
+                Some(layout.center),
+                &st,
+                "single",
+            );
+            assert!(tof_act && tof_txt.contains("VL53L0X") && tof_txt.contains("210 мм"));
+
+            let sn_pos = led_ring_position(layout.center, layout.ring_r, 0, 6);
+            let (sn_txt, sn_act) =
+                enclosure_hover_inspector_text("yandexmini", rect, Some(sn_pos), &st, "single");
+            assert!(sn_act && sn_txt.contains("SN3236 #0") && sn_txt.contains("0x3c"));
+        }
+
+        // 5. mango: battery scale LED 0 and Power indicator
+        {
+            let m = mango_enclosure_layout(rect);
+            let (b_txt, b_act) = enclosure_hover_inspector_text(
+                "mango",
+                rect,
+                Some(m.batt_led_positions[0]),
+                &st,
+                "single",
+            );
+            assert!(b_act && b_txt.contains("mango:*:ring1") && b_txt.contains("AW9110"));
+
+            let (p_txt, p_act) =
+                enclosure_hover_inspector_text("mango", rect, Some(m.power_pos), &st, "single");
+            assert!(p_act && p_txt.contains("Power"));
+        }
     }
 }

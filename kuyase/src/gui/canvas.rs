@@ -2,13 +2,15 @@ pub use crate::gui::display_geom::{
     board_enclosure_shape, board_has_matrix_21x12, board_has_segment_clock,
     build_local_segments_from_text, circle_enclosure_layout, circle_puck_subtype,
     clock_segment_lines, default_board_ring_leds, doa_angle_from_pointer, enclosure_button_pos,
-    enclosure_button_targets, enclosure_inspector_text, hit_test_clock_segment,
-    hit_test_enclosure_target, hit_test_matrix_pixel, led_ring_position, mango_enclosure_layout,
-    render_text_to_matrix_21x12, segment_brightness, squircle_ring_position, CircleEnclosureLayout,
-    CirclePuckSubtype, EnclosureHitTarget, EnclosureShape, MangoEnclosureLayout,
+    enclosure_button_targets, enclosure_hover_inspector_text, enclosure_inspector_text,
+    hit_test_clock_segment, hit_test_enclosure_target, hit_test_matrix_pixel, led_ring_position,
+    mango_enclosure_layout, render_text_to_matrix_21x12, segment_brightness,
+    squircle_ring_position, CircleEnclosureLayout, CirclePuckSubtype, EnclosureHitTarget,
+    EnclosureShape, MangoEnclosureLayout,
 };
 use crate::gui::faceplates::{
-    render_aux_logo_strip, render_matrix_21x12_faceplate, render_segment_clock_faceplate,
+    render_aux_logo_strip, render_display_inspector_bar, render_matrix_21x12_faceplate,
+    render_segment_clock_faceplate,
 };
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Margin, Pos2, RichText, Sense, Stroke, Vec2};
@@ -1161,9 +1163,9 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                     )
                                 };
                                 let tof_label = if tof_near {
-                                    format!("Датчик ToF (VL53L0X): {} мм (РУКА)", st.tof_mm)
+                                    format!("Датчик ToF (VL53L0X): {} мм (РУКА) (?)", st.tof_mm)
                                 } else {
-                                    format!("Датчик ToF (VL53L0X): {} мм", st.tof_mm)
+                                    format!("Датчик ToF (VL53L0X): {} мм (?)", st.tof_mm)
                                 };
                                 ui.add(
                                     egui::Button::new(
@@ -1191,7 +1193,8 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                         Color32::from_rgb(28, 42, 60),
                                     )
                                 };
-                                let us_label = format!("Ультразвук 38.4 кГц: эхо {} мм", st.tof_mm);
+                                let us_label =
+                                    format!("Ультразвук 38.4 кГц: эхо {} мм (?)", st.tof_mm);
                                 ui.add(
                                     egui::Button::new(
                                         RichText::new(us_label).small().monospace().color(us_fg),
@@ -1206,7 +1209,7 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                 );
                             } else {
                                 let als_label =
-                                    format!("Датчик света (ALS): {} лк", st.als_lux);
+                                    format!("Датчик света (ALS): {} лк (?)", st.als_lux);
                                 ui.add(
                                     egui::Button::new(
                                         RichText::new(als_label)
@@ -1226,7 +1229,7 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                 if board_slug == "mango" {
                                     ui.add(
                                         egui::Button::new(
-                                            RichText::new("АКБ CW2217 + IP2366 PD")
+                                            RichText::new("АКБ CW2217 + IP2366 PD (?)")
                                                 .small()
                                                 .monospace()
                                                 .color(Color32::from_rgb(135, 235, 165)),
@@ -1276,10 +1279,7 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                 if app.session.is_some() {
                                     let is_custom = st.ring_trigger.contains("none");
                                     if !is_custom
-                                        && ui
-                                            .small_button("Переключить в sysfs (none)")
-                                            .on_hover_text("Отключить триггер ledfb-ring для прямой записи яркости через sysfs")
-                                            .clicked()
+                                        && ui.small_button("Переключить в sysfs (none)").clicked()
                                     {
                                         app.send_serial_command(
                                             "for d in /sys/class/leds/*:ring*; do echo none > \"$d/trigger\"; done",
@@ -1477,34 +1477,17 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                         }
 
                         ui.add_space(4.0);
-                        let inspector_txt = enclosure_inspector_text(
+                        let hover_ptr = response
+                            .hover_pos()
+                            .or_else(|| response.interact_pointer_pos());
+                        let (inspector_txt, is_active_hover) = enclosure_hover_inspector_text(
                             &board_slug,
+                            rect,
+                            hover_ptr,
                             &st,
-                            hovered_target,
                             &app.button_press_action,
                         );
-                        let inspector_fg = if hovered_target.is_some() {
-                            Color32::from_rgb(145, 215, 255)
-                        } else {
-                            Color32::from_rgb(160, 172, 190)
-                        };
-                        egui::Frame::none()
-                            .fill(Color32::from_rgb(16, 19, 24))
-                            .stroke(Stroke::new(1.0, Color32::from_rgb(44, 52, 64)))
-                            .rounding(5.0)
-                            .inner_margin(Margin::symmetric(8.0, 4.0))
-                            .show(ui, |ui| {
-                                ui.set_min_width(ui.available_width());
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(inspector_txt)
-                                            .small()
-                                            .monospace()
-                                            .color(inspector_fg),
-                                    )
-                                    .truncate(),
-                                );
-                            });
+                        render_display_inspector_bar(ui, &inspector_txt, is_active_hover);
                     });
 
                     ui.add_space(6.0);
