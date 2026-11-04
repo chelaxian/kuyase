@@ -1,7 +1,4 @@
-use crate::archive_formats::{
-    extract_cpio_into_tree, extract_payload_bytes_into_tree, extract_ubi_into_tree,
-    is_cpio_newc_archive, UBI_EC_MAGIC,
-};
+use crate::archive_formats::{extract_payload_bytes_into_tree, extract_ubi_into_tree, UBI_EC_MAGIC};
 use crate::ext_fs::write_ext2_image;
 pub use crate::rootfs_tree::{
     normalize_rel_path, read_tar_from_reader, read_tar_gz_into_tree, write_tree_to_tar_gz,
@@ -13,7 +10,7 @@ pub use protocol::{
     detect_board_hint_from_filename, detect_board_hint_from_path, normalize_board_slug,
 };
 use std::fs::{self, File};
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 pub const EMBEDDED_INIT_SH: &[u8] = include_bytes!("../../guest-init/equasar-qemu-init.sh");
@@ -204,9 +201,6 @@ fn load_dump_into_tree(path: &Path) -> Result<RootfsTree, String> {
             path.join("ubi0_0_rootfs.img"),
             path.join("mtd").join("mtd3_system.bin"),
             path.join("mtd3_system.bin"),
-            path.join("rootfs.ubifs"),
-            path.join("update.swu"),
-            path.join("update.zip"),
         ];
         for c in &candidates {
             if c.is_file() {
@@ -241,88 +235,33 @@ fn load_dump_into_tree(path: &Path) -> Result<RootfsTree, String> {
         return read_tar_from_reader(f);
     }
     if name.ends_with(".zip") {
-        // Official Yandex OTA packages are named `update.zip`, but on disk they are often
-        // `swupdate` SVR4 ASCII CPIO containers (`070701` / `070702`) rather than PKZIP (`PK\x03\x04`).
-        // Inspect the file magic before invoking `ZipArchive::new`, and if it is a real PKZIP
-        // archive, also check for nested `CPIO` / `rootfs.ubifs` / `rootfs.tar.gz` payloads.
-        let mut f = File::open(path).map_err(|e| e.to_string())?;
-        let mut magic = [0u8; 6];
-        let n = f.read(&mut magic).map_err(|e| e.to_string())?;
-        if n >= 4 && &magic[0..2] == b"PK" {
-            f.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-            if let Ok(mut za) = zip::ZipArchive::new(f) {
-                // 1. Check if zip contains a nested rootfs.tar.gz / .tgz
-                for i in 0..za.len() {
-                    let mut zf = za.by_index(i).map_err(|e| e.to_string())?;
-                    let zname = zf.name().to_ascii_lowercase();
-                    if zname.ends_with("rootfs.tar.gz") || zname.ends_with(".tgz") {
-                        let mut bytes = Vec::new();
-                        zf.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-                        return read_tar_from_reader(GzDecoder::new(Cursor::new(bytes)));
-                    }
-                }
-                // 2. Check if zip contains a nested OTA CPIO archive or rootfs image
-                for i in 0..za.len() {
-                    let mut zf = za.by_index(i).map_err(|e| e.to_string())?;
-                    if zf.is_dir() {
-                        continue;
-                    }
-                    let zname = zf.name().to_ascii_lowercase();
-                    let base = zname.rsplit('/').next().unwrap_or(&zname);
-                    if base == "rootfs.ubifs"
-                        || base.ends_with(".ubifs")
-                        || base.ends_with(".swu")
-                        || base.ends_with(".cpio")
-                        || base == "ubi0_0_rootfs.img"
-                        || base == "mtd3_system.bin"
-                        || base == "system.img"
-                        || base == "rootfs.img"
-                        || base.ends_with(".squashfs")
-                        || base.ends_with("-system.ext4")
-                    {
-                        let mut bytes = Vec::new();
-                        zf.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-                        if let Ok(tree) = extract_payload_bytes_into_tree(&bytes) {
-                            if !tree.entries.is_empty() {
-                                return Ok(tree);
-                            }
-                        }
-                    }
-                }
-                // 3. Extract zip entries into a RootfsTree, or unwrap any inner CPIO/UBIFS image
-                let mut tree = RootfsTree::default();
-                for i in 0..za.len() {
-                    let mut zf = za.by_index(i).map_err(|e| e.to_string())?;
-                    let Some(norm) = normalize_rel_path(zf.name()) else {
-                        continue;
-                    };
-                    let mode = zf.unix_mode().map(|m| (m as u16) & 0o7777).unwrap_or(0o755);
-                    if zf.is_dir() {
-                        tree.insert_dir(&norm, mode);
-                    } else {
-                        let mut buf = Vec::new();
-                        zf.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-                        tree.insert_file(&norm, buf, mode);
-                    }
-                }
-                if tree.get("system/vendor/quasar/quasar.cfg").is_none()
-                    && tree.get("bin/busybox").is_none()
-                {
-                    for node in tree.entries.values() {
-                        if let RootfsNodeKind::File(ref bytes) = node.kind {
-                            if bytes.len() >= 110 {
-                                if let Ok(inner_tree) = extract_payload_bytes_into_tree(bytes) {
-                                    if !inner_tree.entries.is_empty() {
-                                        return Ok(inner_tree);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                return Ok(tree);
+        let f = File::open(path).map_err(|e| e.to_string())?;
+        let mut za = zip::ZipArchive::new(f).map_err(|e| format!("zip error: {}", e))?;
+        // Check if zip contains a nested rootfs.tar.gz
+        for i in 0..za.len() {
+            let mut zf = za.by_index(i).map_err(|e| e.to_string())?;
+            if zf.name().ends_with("rootfs.tar.gz") || zf.name().ends_with(".tgz") {
+                let mut bytes = Vec::new();
+                zf.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                return read_tar_from_reader(GzDecoder::new(Cursor::new(bytes)));
             }
         }
+        let mut tree = RootfsTree::default();
+        for i in 0..za.len() {
+            let mut zf = za.by_index(i).map_err(|e| e.to_string())?;
+            let Some(norm) = normalize_rel_path(zf.name()) else {
+                continue;
+            };
+            let mode = zf.unix_mode().map(|m| (m as u16) & 0o7777).unwrap_or(0o755);
+            if zf.is_dir() {
+                tree.insert_dir(&norm, mode);
+            } else {
+                let mut buf = Vec::new();
+                zf.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+                tree.insert_file(&norm, buf, mode);
+            }
+        }
+        return Ok(tree);
     }
 
     let mut raw = fs::read(path).map_err(|e| format!("failed to read '{}': {}", path.display(), e))?;
@@ -332,10 +271,6 @@ fn load_dump_into_tree(path: &Path) -> Result<RootfsTree, String> {
             .read_to_end(&mut dec)
             .map_err(|e| format!("gzip decode failed: {}", e))?;
         raw = dec;
-    }
-
-    if is_cpio_newc_archive(&raw) {
-        return extract_cpio_into_tree(&raw);
     }
 
     if raw.len() >= 4 && &raw[0..4] == UBI_EC_MAGIC {
@@ -460,8 +395,6 @@ fn is_single_dump_dir(dir: &Path) -> bool {
         dir.join("ubi0_0_rootfs.img"),
         dir.join("mtd").join("mtd3_system.bin"),
         dir.join("mtd3_system.bin"),
-        dir.join("rootfs.ubifs"),
-        dir.join("update.swu"),
         dir.join("system").join("vendor").join("quasar").join("quasar.cfg"),
     ];
     if single_markers.iter().any(|p| p.is_file()) {
@@ -793,169 +726,6 @@ mod tests {
         let readback_plumnc = read_ext2_image(&out_plumnc).unwrap();
         assert_eq!(detect_board_from_tree(&readback_plumnc), "plumnc");
         assert!(readback_plumnc.get("etc/hosts.bak").is_none());
-
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
-
-    fn build_synthetic_lzo_ubifs_rootfs() -> Vec<u8> {
-        use crate::archive_formats::{
-            build_test_ubifs_compressed_data_node, build_test_ubifs_dent_node,
-            build_test_ubifs_ino_node,
-        };
-
-        let ino_node = |sqnum: u64, inum: u32, mode: u16, size: usize| -> Vec<u8> {
-            build_test_ubifs_ino_node(sqnum, inum, mode, 0, 0, size as u64, b"")
-        };
-        let dent_node =
-            |sqnum: u64, parent_inum: u32, target_inum: u32, entry_type: u8, name: &str| -> Vec<u8> {
-                build_test_ubifs_dent_node(sqnum, parent_inum, target_inum, entry_type, name)
-            };
-        let lzo_data_node = |sqnum: u64, inum: u32, plain: &[u8]| -> Vec<u8> {
-            assert!(plain.len() <= 238);
-            let mut lzo = Vec::with_capacity(plain.len() + 4);
-            lzo.push(17 + (plain.len() as u8));
-            lzo.extend_from_slice(plain);
-            lzo.extend_from_slice(&[0x11, 0x00, 0x00]); // LZO1X EOF
-            build_test_ubifs_compressed_data_node(sqnum, inum, 0, plain.len(), 1, &lzo)
-        };
-
-        let cfg = br#"{"deviceType": "yandexmini_2"}"#;
-        let ver = b"0.367.1.6.4635833455.20260911.297\n";
-        let secret = b"psk=topsecret";
-
-        let mut img = Vec::new();
-        // Directories: / (1), /system (2), /system/vendor (3), /system/vendor/quasar (4), /etc (5)
-        img.extend_from_slice(&ino_node(1, 1, 0x4000 | 0o755, 0));
-        img.extend_from_slice(&dent_node(2, 1, 2, 1, "system"));
-        img.extend_from_slice(&ino_node(3, 2, 0x4000 | 0o755, 0));
-        img.extend_from_slice(&dent_node(4, 2, 3, 1, "vendor"));
-        img.extend_from_slice(&ino_node(5, 3, 0x4000 | 0o755, 0));
-        img.extend_from_slice(&dent_node(6, 3, 4, 1, "quasar"));
-        img.extend_from_slice(&ino_node(7, 4, 0x4000 | 0o755, 0));
-        img.extend_from_slice(&dent_node(8, 1, 5, 1, "etc"));
-        img.extend_from_slice(&ino_node(9, 5, 0x4000 | 0o755, 0));
-
-        // Files: /system/vendor/quasar/quasar.cfg (6), /system/vendor/quasar/version_full (7), /etc/wpa_supplicant.conf (8)
-        img.extend_from_slice(&dent_node(10, 4, 6, 0, "quasar.cfg"));
-        img.extend_from_slice(&ino_node(11, 6, 0x8000 | 0o644, cfg.len()));
-        img.extend_from_slice(&lzo_data_node(12, 6, cfg));
-
-        img.extend_from_slice(&dent_node(13, 4, 7, 0, "version_full"));
-        img.extend_from_slice(&ino_node(14, 7, 0x8000 | 0o644, ver.len()));
-        img.extend_from_slice(&lzo_data_node(15, 7, ver));
-
-        img.extend_from_slice(&dent_node(16, 5, 8, 0, "wpa_supplicant.conf"));
-        img.extend_from_slice(&ino_node(17, 8, 0x8000 | 0o600, secret.len()));
-        img.extend_from_slice(&lzo_data_node(18, 8, secret));
-
-        img
-    }
-
-    #[test]
-    fn test_prepare_guest_image_from_synthetic_ota_cpio_update_zip_and_pkzip_wrapped() {
-        use std::io::Write;
-
-        let temp_dir =
-            std::env::temp_dir().join(format!("kuyase-ota-cpio-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&temp_dir);
-        fs::create_dir_all(temp_dir.join("guest-init").join("bin")).unwrap();
-
-        fs::write(
-            temp_dir.join("guest-init").join("equasar-qemu-init.sh"),
-            b"#!/bin/sh\necho ota-init\n",
-        )
-        .unwrap();
-        let mut mock_elf = b"\x7fELFmockbridge".to_vec();
-        mock_elf.resize(128, 0);
-        fs::write(
-            temp_dir
-                .join("guest-init")
-                .join("bin")
-                .join("qemu-hw-bridge"),
-            &mock_elf,
-        )
-        .unwrap();
-
-        use crate::archive_formats::{append_test_cpio_entry, CPIO_CRC_MAGIC};
-
-        let ubifs_bytes = build_synthetic_lzo_ubifs_rootfs();
-        let mut cpio_bytes = Vec::new();
-        append_test_cpio_entry(
-            &mut cpio_bytes,
-            CPIO_CRC_MAGIC,
-            1,
-            0o100644,
-            "sw-description",
-            b"software = { version = \"0.367.1.6\"; };",
-        );
-        append_test_cpio_entry(
-            &mut cpio_bytes,
-            CPIO_CRC_MAGIC,
-            2,
-            0o100644,
-            "boot.img.encrypt",
-            b"ENCRYPTED-KERNEL",
-        );
-        append_test_cpio_entry(
-            &mut cpio_bytes,
-            CPIO_CRC_MAGIC,
-            3,
-            0o100644,
-            "dt.img.encrypt",
-            b"ENCRYPTED-DTB",
-        );
-        append_test_cpio_entry(
-            &mut cpio_bytes,
-            CPIO_CRC_MAGIC,
-            4,
-            0o100644,
-            "rootfs.ubifs",
-            &ubifs_bytes,
-        );
-        append_test_cpio_entry(&mut cpio_bytes, CPIO_CRC_MAGIC, 5, 0, "TRAILER!!!", b"");
-
-        // 1. Raw swupdate CPIO archive named `update.zip`
-        let cpio_zip_path = temp_dir.join("update.zip");
-        fs::write(&cpio_zip_path, &cpio_bytes).unwrap();
-        let out_ext4_1 = temp_dir.join("work").join("ota-cpio-system.ext4");
-        let (board_1, built_1) =
-            build_guest_image_from_dump(&temp_dir, None, &cpio_zip_path, Some(&out_ext4_1))
-                .unwrap();
-        assert_eq!(board_1, "yandexmini2");
-        assert_eq!(built_1, out_ext4_1);
-        let rb_1 = read_ext2_image(&out_ext4_1).unwrap();
-        assert_eq!(
-            rb_1.get_file_bytes("system/vendor/quasar/version_full")
-                .unwrap(),
-            b"0.367.1.6.4635833455.20260911.297\n"
-        );
-        assert!(rb_1.get("etc/wpa_supplicant.conf").is_none());
-        assert_eq!(
-            rb_1.get_file_bytes("quasar-qemu-init.sh").unwrap(),
-            b"#!/bin/sh\necho ota-init\n"
-        );
-
-        // 2. Real PKZIP archive wrapping `update.swu` (CPIO)
-        let pkzip_path = temp_dir.join("wrapped-ota.zip");
-        {
-            let zf = File::create(&pkzip_path).unwrap();
-            let mut zw = zip::ZipWriter::new(zf);
-            let opts = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Stored);
-            zw.start_file("update.swu", opts).unwrap();
-            zw.write_all(&cpio_bytes).unwrap();
-            zw.finish().unwrap();
-        }
-        let out_ext4_2 = temp_dir.join("work").join("ota-pkzip-system.ext4");
-        let (board_2, _) =
-            build_guest_image_from_dump(&temp_dir, None, &pkzip_path, Some(&out_ext4_2)).unwrap();
-        assert_eq!(board_2, "yandexmini2");
-        let rb_2 = read_ext2_image(&out_ext4_2).unwrap();
-        assert_eq!(
-            rb_2.get_file_bytes("system/vendor/quasar/version_full")
-                .unwrap(),
-            b"0.367.1.6.4635833455.20260911.297\n"
-        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

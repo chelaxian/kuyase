@@ -15,7 +15,7 @@ _Avoid_: `deviceType`, модель, маркетинговое название
 _Avoid_: менеджер драйверов, глобальный синглтон железа.
 
 **Системный дамп (`Firmware Dump`)**:
-Сырой слепок системного раздела колонки (`rootfs.tar.gz`, `ubi0_0_rootfs.img`, `mtd3_system.bin`, `system.img` или OTA-архив `swupdate` `update.zip` с `rootfs.ubifs`), снятый через `kuyase dump <ip>`, окно «Образы и QEMU...» в GUI или автономные скрипты `scripts/dump-from-adb.sh` / `.ps1`, и не содержащий пользовательских разделов (`/data`, `/bkupgrade`) и ключей устройства.
+Сырой слепок системного раздела колонки (`rootfs.tar.gz`, `ubi0_0_rootfs.img`, `mtd3_system.bin` или `system.img`), снятый через `kuyase dump <ip>`, окно «Образы и QEMU...» в GUI или автономные скрипты `scripts/dump-from-adb.sh` / `.ps1`, и не содержащий пользовательских разделов (`/data`, `/bkupgrade`) и ключей устройства.
 _Avoid_: бэкап, образ эмулятора.
 
 **Базовый образ (`Base Image`)**:
