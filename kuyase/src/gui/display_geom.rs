@@ -983,47 +983,26 @@ pub fn hit_test_matrix_pixel(rect: Rect, cell: f32, pointer: Pos2) -> Option<usi
 #[derive(Debug, Clone, Copy)]
 pub struct Station2FaceplateLayout {
     pub outer_rect: Rect,
-    pub strip_rect: Rect,
-    pub minus_pos: Pos2,
-    pub action_pos: Pos2,
-    pub plus_pos: Pos2,
     pub panel_rect: Rect,
     pub grid_rect: Rect,
     pub cell_size: f32,
 }
 
 pub fn station2_faceplate_layout(outer_rect: Rect) -> Station2FaceplateLayout {
-    let max_cell_w = ((outer_rect.width() - 28.0) / (STATION2_PANEL_COLS as f32)).max(10.0);
-    let max_cell_h = ((outer_rect.height() - 44.0) / (STATION2_PANEL_ROWS as f32)).max(10.0);
-    let cell_size = max_cell_w.min(max_cell_h).clamp(12.0, 17.0);
+    let max_cell_w = ((outer_rect.width() - 24.0) / (STATION2_PANEL_COLS as f32)).max(10.0);
+    let max_cell_h = ((outer_rect.height() - 18.0) / (STATION2_PANEL_ROWS as f32)).max(10.0);
+    let cell_size = max_cell_w.min(max_cell_h).clamp(12.0, 17.5);
     let grid_w = (STATION2_PANEL_COLS as f32) * cell_size;
     let grid_h = (STATION2_PANEL_ROWS as f32) * cell_size;
 
-    let strip_y = outer_rect.top() + 15.0;
-    let strip_w = (grid_w + 12.0).min((outer_rect.width() - 16.0).max(120.0));
-    let strip_rect = Rect::from_center_size(
-        Pos2::new(outer_rect.center().x, strip_y),
-        eframe::egui::Vec2::new(strip_w, 20.0),
-    );
-    let btn_off = (strip_w * 0.34).max(34.0);
-    let action_pos = Pos2::new(strip_rect.center().x, strip_y);
-    let minus_pos = Pos2::new(strip_rect.center().x - btn_off, strip_y);
-    let plus_pos = Pos2::new(strip_rect.center().x + btn_off, strip_y);
-
-    let grid_top = strip_rect.bottom() + 9.0;
-    let grid_left = outer_rect.center().x - grid_w * 0.5;
-    let grid_rect = Rect::from_min_size(
-        Pos2::new(grid_left, grid_top),
+    let grid_rect = Rect::from_center_size(
+        outer_rect.center(),
         eframe::egui::Vec2::new(grid_w, grid_h),
     );
     let panel_rect = grid_rect.expand(4.0);
 
     Station2FaceplateLayout {
         outer_rect,
-        strip_rect,
-        minus_pos,
-        action_pos,
-        plus_pos,
         panel_rect,
         grid_rect,
         cell_size,
@@ -1674,9 +1653,9 @@ mod tests {
 
     #[test]
     fn test_station2_faceplate_hit_testing_inspector_and_presets() {
-        let outer = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(280.0, 178.0));
+        let outer = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(280.0, 150.0));
         let layout = station2_faceplate_layout(outer);
-        assert!(layout.strip_rect.bottom() < layout.grid_rect.top());
+        assert!(outer.contains(layout.panel_rect.min) && outer.contains(layout.panel_rect.max));
 
         // 1. Corners and center hit-testing on 11x8 grid
         for (col, row, expected_idx) in [
@@ -1695,15 +1674,15 @@ mod tests {
             );
         }
 
-        // 2. Top reference touch bar [ - ] [ o ] [ + ] above grid_rect must return None
-        for bar_pt in [
-            layout.minus_pos,
-            layout.action_pos,
-            layout.plus_pos,
-            layout.strip_rect.center(),
+        // 2. Points outside grid_rect must return None
+        for outside_pt in [
+            Pos2::new(layout.grid_rect.left() - 2.0, layout.grid_rect.center().y),
+            Pos2::new(layout.grid_rect.right() + 2.0, layout.grid_rect.center().y),
+            Pos2::new(layout.grid_rect.center().x, layout.grid_rect.top() - 2.0),
+            Pos2::new(layout.grid_rect.center().x, layout.grid_rect.bottom() + 2.0),
         ] {
             assert_eq!(
-                hit_test_station2_faceplate_pixel(layout.grid_rect, layout.cell_size, bar_pt),
+                hit_test_station2_faceplate_pixel(layout.grid_rect, layout.cell_size, outside_pt),
                 None
             );
         }

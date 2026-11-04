@@ -863,7 +863,7 @@ pub fn render_station2_light_panel_faceplate(
         st.ring_pixels = app.station2_custom_pixels.clone();
     }
 
-    let canvas_size = Vec2::new(ui.available_width().max(260.0), 174.0);
+    let canvas_size = Vec2::new(ui.available_width().max(260.0), 146.0);
     let (outer_rect, resp) = ui.allocate_exact_size(canvas_size, Sense::click_and_drag());
     let layout = station2_faceplate_layout(outer_rect);
 
@@ -915,63 +915,7 @@ pub fn render_station2_light_panel_faceplate(
         Stroke::new(1.2, Color32::from_rgb(56, 64, 80)),
     );
 
-    // Верхний ориентир крышки: силуэт сенсорной планки [ − ]   [ ○ ]   [ + ]
-    painter.rect_filled(layout.strip_rect, 7.0, Color32::from_rgb(12, 15, 21));
-    painter.rect_stroke(
-        layout.strip_rect,
-        7.0,
-        Stroke::new(1.0, Color32::from_rgb(42, 50, 64)),
-    );
-    let icon_fg = Color32::from_rgb(138, 152, 174);
-    let icon_stroke = Stroke::new(1.5, icon_fg);
-    for bpos in [layout.minus_pos, layout.action_pos, layout.plus_pos] {
-        painter.circle_filled(bpos, 7.2, Color32::from_rgb(18, 22, 30));
-        painter.circle_stroke(bpos, 7.2, Stroke::new(1.0, Color32::from_rgb(52, 60, 76)));
-    }
-    painter.line_segment(
-        [
-            Pos2::new(layout.minus_pos.x - 3.2, layout.minus_pos.y),
-            Pos2::new(layout.minus_pos.x + 3.2, layout.minus_pos.y),
-        ],
-        icon_stroke,
-    );
-    painter.circle_stroke(layout.action_pos, 3.0, icon_stroke);
-    painter.line_segment(
-        [
-            Pos2::new(layout.plus_pos.x - 3.2, layout.plus_pos.y),
-            Pos2::new(layout.plus_pos.x + 3.2, layout.plus_pos.y),
-        ],
-        icon_stroke,
-    );
-    painter.line_segment(
-        [
-            Pos2::new(layout.plus_pos.x, layout.plus_pos.y - 3.2),
-            Pos2::new(layout.plus_pos.x, layout.plus_pos.y + 3.2),
-        ],
-        icon_stroke,
-    );
-    painter.text(
-        Pos2::new(
-            (layout.minus_pos.x + layout.action_pos.x) * 0.5,
-            layout.strip_rect.center().y,
-        ),
-        egui::Align2::CENTER_CENTER,
-        "ВЕРХ КРЫШКИ",
-        egui::FontId::monospace(8.5),
-        Color32::from_rgb(108, 122, 144),
-    );
-    painter.text(
-        Pos2::new(
-            (layout.action_pos.x + layout.plus_pos.x) * 0.5,
-            layout.strip_rect.center().y,
-        ),
-        egui::Align2::CENTER_CENTER,
-        "ВИД СВЕРХУ",
-        egui::FontId::monospace(8.5),
-        Color32::from_rgb(108, 122, 144),
-    );
-
-    // Крупная световая панель 11×8 (88 RGBW LED, /dev/fb0) под сенсорной планкой
+    // Крупная световая панель 11×8 (88 RGBW LED, /dev/fb0)
     painter.rect_filled(layout.panel_rect, 6.0, Color32::from_rgb(11, 14, 19));
     painter.rect_stroke(
         layout.panel_rect,
