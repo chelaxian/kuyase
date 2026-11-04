@@ -189,14 +189,14 @@ impl GuiAppState {
             selected_led_pattern: String::new(),
             clock_text_input: "19:30".to_string(),
             clock_brightness: 255,
-            clock_active_mask: crate::gui::canvas::build_local_segments_from_text("19:30", 255)
+            clock_active_mask: protocol::display::build_segments_map_from_text("19:30", 255)
                 .into_iter()
                 .filter(|(_, v)| *v > 0)
                 .map(|(k, _)| (k, true))
                 .collect(),
             matrix_text_input: "19:30".to_string(),
-            matrix_custom_pixels: crate::gui::canvas::render_text_to_matrix_21x12("19:30", 255),
-            matrix_active_mask: crate::gui::canvas::render_text_to_matrix_21x12("19:30", 255)
+            matrix_custom_pixels: protocol::display::render_text_to_matrix_21x12("19:30", 255),
+            matrix_active_mask: protocol::display::render_text_to_matrix_21x12("19:30", 255)
                 .into_iter()
                 .map(|v| v > 0)
                 .collect(),

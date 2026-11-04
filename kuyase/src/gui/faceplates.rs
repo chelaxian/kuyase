@@ -1,13 +1,89 @@
 use crate::gui::canvas::{draw_circular_oknix_logo, draw_ring_led};
 use crate::gui::display_geom::{
     build_local_segments_from_text, clock_inspector_text, clock_segment_lines,
-    clock_special_positions, hit_test_clock_segment, hit_test_matrix_pixel, matrix_inspector_text,
-    render_text_to_matrix_21x12, segment_brightness,
+    clock_special_positions, hit_test_clock_segment, hit_test_matrix_pixel, mango_battery_led_rgb,
+    matrix_inspector_text, render_text_to_matrix_21x12, segment_brightness,
 };
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use protocol::{BridgeStateSnapshot, HostCommand};
 use std::collections::BTreeMap;
+
+fn pointer_draw_erase_mode(ui: &egui::Ui, resp: &egui::Response) -> Option<(Pos2, bool)> {
+    let lmb_down = ui.input(|i| i.pointer.primary_down());
+    let rmb_down = ui.input(|i| i.pointer.secondary_down());
+    let lmb_clicked = resp.clicked();
+    let rmb_clicked = resp.secondary_clicked();
+    if (lmb_down || rmb_down || lmb_clicked || rmb_clicked)
+        && (resp.hovered() || resp.dragged() || lmb_clicked || rmb_clicked)
+    {
+        let ptr = ui
+            .input(|i| i.pointer.interact_pos())
+            .or_else(|| resp.interact_pointer_pos())?;
+        let draw_mode = (lmb_down || lmb_clicked) && !(rmb_down || rmb_clicked);
+        Some((ptr, draw_mode))
+    } else {
+        None
+    }
+}
+
+fn apply_clock_text(app: &mut GuiAppState, text: &str) {
+    let br = if text.is_empty() {
+        app.clock_active_mask.clear();
+        0
+    } else {
+        if app.clock_brightness == 0 {
+            app.clock_brightness = 255;
+        }
+        let built = build_local_segments_from_text(text, 255);
+        app.clock_active_mask = built
+            .into_iter()
+            .filter(|(_, v)| *v > 0)
+            .map(|(k, _)| (k, true))
+            .collect();
+        app.clock_brightness
+    };
+    if let Some(ref mut latest) = app.latest_state {
+        latest.clock_segments = build_local_segments_from_text(text, br);
+    }
+    app.send_command(HostCommand::SetClockDisplay {
+        segments: None,
+        replace: None,
+        pixels: None,
+        led_frame: None,
+        brightness: Some(br),
+        scale_brightness: None,
+        text: Some(text.to_string()),
+    });
+}
+
+fn apply_matrix_text(app: &mut GuiAppState, text: &str) {
+    let br = if text.is_empty() {
+        app.matrix_active_mask.fill(false);
+        app.matrix_custom_pixels.fill(0);
+        0
+    } else {
+        if app.clock_brightness == 0 {
+            app.clock_brightness = 255;
+        }
+        let mask_px = render_text_to_matrix_21x12(text, 255);
+        app.matrix_active_mask = mask_px.iter().map(|&v| v > 0).collect();
+        app.matrix_custom_pixels = render_text_to_matrix_21x12(text, app.clock_brightness);
+        app.clock_brightness
+    };
+    if let Some(ref mut latest) = app.latest_state {
+        latest.screen_pixels = app.matrix_custom_pixels.clone();
+    }
+    app.send_command(HostCommand::SetClockDisplay {
+        segments: None,
+        replace: None,
+        pixels: None,
+        led_frame: None,
+        brightness: Some(br),
+        scale_brightness: None,
+        text: Some(text.to_string()),
+    });
+}
 
 pub(crate) fn render_display_inspector_bar(ui: &mut egui::Ui, text: &str, is_active_hover: bool) {
     egui::Frame::none()
@@ -199,48 +275,36 @@ pub fn render_segment_clock_faceplate(
     let cp = ui.painter_at(crect);
     draw_segment_clock(&cp, crect, &active_segs, hovered_seg.as_deref());
 
-    let lmb_down = ui.input(|i| i.pointer.primary_down());
-    let rmb_down = ui.input(|i| i.pointer.secondary_down());
-    let lmb_clicked = cresp.clicked();
-    let rmb_clicked = cresp.secondary_clicked();
-    if (lmb_down || rmb_down || lmb_clicked || rmb_clicked)
-        && (cresp.hovered() || cresp.dragged() || lmb_clicked || rmb_clicked)
-    {
-        if let Some(ptr) = ui
-            .input(|i| i.pointer.interact_pos())
-            .or_else(|| cresp.interact_pointer_pos())
-        {
-            if let Some(seg_key) = hit_test_clock_segment(crect, ptr) {
-                let draw_mode = (lmb_down || lmb_clicked) && !(rmb_down || rmb_clicked);
-                let is_on = app.clock_active_mask.get(&seg_key).copied().unwrap_or(false)
-                    && segment_brightness(&active_segs, &seg_key) > 0;
-                if draw_mode != is_on {
-                    let next_val = if draw_mode {
-                        if app.clock_brightness == 0 {
-                            app.clock_brightness = 255;
-                        }
-                        app.clock_active_mask.insert(seg_key.clone(), true);
-                        app.clock_brightness
-                    } else {
-                        app.clock_active_mask.remove(&seg_key);
-                        0
-                    };
-                    active_segs.insert(seg_key.clone(), next_val);
-                    if let Some(ref mut latest) = app.latest_state {
-                        latest.clock_segments.insert(seg_key.clone(), next_val);
+    if let Some((ptr, draw_mode)) = pointer_draw_erase_mode(ui, &cresp) {
+        if let Some(seg_key) = hit_test_clock_segment(crect, ptr) {
+            let is_on = app.clock_active_mask.get(&seg_key).copied().unwrap_or(false)
+                && segment_brightness(&active_segs, &seg_key) > 0;
+            if draw_mode != is_on {
+                let next_val = if draw_mode {
+                    if app.clock_brightness == 0 {
+                        app.clock_brightness = 255;
                     }
-                    let mut map = BTreeMap::new();
-                    map.insert(seg_key, next_val);
-                    app.send_command(HostCommand::SetClockDisplay {
-                        segments: Some(map),
-                        replace: Some(false),
-                        pixels: None,
-                        led_frame: None,
-                        brightness: Some(app.clock_brightness),
-                        scale_brightness: None,
-                        text: None,
-                    });
+                    app.clock_active_mask.insert(seg_key.clone(), true);
+                    app.clock_brightness
+                } else {
+                    app.clock_active_mask.remove(&seg_key);
+                    0
+                };
+                active_segs.insert(seg_key.clone(), next_val);
+                if let Some(ref mut latest) = app.latest_state {
+                    latest.clock_segments.insert(seg_key.clone(), next_val);
                 }
+                let mut map = BTreeMap::new();
+                map.insert(seg_key, next_val);
+                app.send_command(HostCommand::SetClockDisplay {
+                    segments: Some(map),
+                    replace: Some(false),
+                    pixels: None,
+                    led_frame: None,
+                    brightness: Some(app.clock_brightness),
+                    scale_brightness: None,
+                    text: None,
+                });
             }
         }
     }
@@ -262,60 +326,13 @@ pub fn render_segment_clock_faceplate(
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if enter || ui.button("Вывести").clicked() {
             let txt = app.clock_text_input.clone();
-            if !txt.is_empty() && app.clock_brightness == 0 {
-                app.clock_brightness = 255;
-            }
-            let built = build_local_segments_from_text(&txt, 255);
-            app.clock_active_mask = built
-                .into_iter()
-                .filter(|(_, v)| *v > 0)
-                .map(|(k, _)| (k, true))
-                .collect();
-            if let Some(ref mut latest) = app.latest_state {
-                latest.clock_segments =
-                    build_local_segments_from_text(&txt, app.clock_brightness);
-            }
-            app.send_command(HostCommand::SetClockDisplay {
-                segments: None,
-                replace: None,
-                pixels: None,
-                led_frame: None,
-                brightness: Some(app.clock_brightness),
-                scale_brightness: None,
-                text: Some(txt),
-            });
+            apply_clock_text(app, &txt);
         }
         for preset in ["19:30", "+24°", "-05°", ""] {
             let lbl = if preset.is_empty() { "Погасить" } else { preset };
             if ui.button(lbl).clicked() {
                 app.clock_text_input = preset.to_string();
-                let br = if preset.is_empty() {
-                    app.clock_active_mask.clear();
-                    0
-                } else {
-                    if app.clock_brightness == 0 {
-                        app.clock_brightness = 255;
-                    }
-                    let built = build_local_segments_from_text(preset, 255);
-                    app.clock_active_mask = built
-                        .into_iter()
-                        .filter(|(_, v)| *v > 0)
-                        .map(|(k, _)| (k, true))
-                        .collect();
-                    app.clock_brightness
-                };
-                if let Some(ref mut latest) = app.latest_state {
-                    latest.clock_segments = build_local_segments_from_text(preset, br);
-                }
-                app.send_command(HostCommand::SetClockDisplay {
-                    segments: None,
-                    replace: None,
-                    pixels: None,
-                    led_frame: None,
-                    brightness: Some(br),
-                    scale_brightness: None,
-                    text: Some(preset.to_string()),
-                });
+                apply_clock_text(app, preset);
             }
         }
     });
@@ -376,12 +393,7 @@ pub fn render_aux_logo_strip(
             bp.rect_filled(brect, 11.0, Color32::from_rgb(15, 18, 24));
             bp.rect_stroke(brect, 11.0, Stroke::new(1.0, Color32::from_rgb(50, 58, 72)));
             for idx in 0..4 {
-                let default_batt = if idx < 3 {
-                    [215, 232, 255]
-                } else {
-                    [0, 0, 0]
-                };
-                let rgb = st.ring_pixels.get(idx).copied().unwrap_or(default_batt);
+                let rgb = mango_battery_led_rgb(&st.ring_pixels, idx);
                 let x = brect.left() + 12.0 + (idx as f32) * 16.0;
                 draw_ring_led(&bp, Pos2::new(x, brect.center().y), 3.8, rgb);
             }
@@ -564,48 +576,36 @@ pub fn render_matrix_21x12_faceplate(
     mp.rect_filled(mrect, 6.0, Color32::from_rgb(13, 15, 20));
     mp.rect_stroke(mrect, 6.0, Stroke::new(1.0, Color32::from_rgb(48, 56, 70)));
 
-    let lmb_down = ui.input(|i| i.pointer.primary_down());
-    let rmb_down = ui.input(|i| i.pointer.secondary_down());
-    let lmb_clicked = mresp.clicked();
-    let rmb_clicked = mresp.secondary_clicked();
-    if (lmb_down || rmb_down || lmb_clicked || rmb_clicked)
-        && (mresp.hovered() || mresp.dragged() || lmb_clicked || rmb_clicked)
-    {
-        if let Some(p) = ui
-            .input(|i| i.pointer.interact_pos())
-            .or_else(|| mresp.interact_pointer_pos())
-        {
-            if let Some(idx) = hit_test_matrix_pixel(mrect, cell, p) {
-                let draw_mode = (lmb_down || lmb_clicked) && !(rmb_down || rmb_clicked);
-                if draw_mode && app.clock_brightness == 0 {
-                    app.clock_brightness = 255;
-                }
-                let next_v = if draw_mode {
-                    app.clock_brightness.max(1)
-                } else {
-                    0
-                };
-                if app.matrix_custom_pixels[idx] != next_v
-                    || app.matrix_active_mask[idx] != draw_mode
-                {
-                    app.matrix_active_mask[idx] = draw_mode;
-                    app.matrix_custom_pixels[idx] = next_v;
-                    if let Some(ref mut latest) = app.latest_state {
-                        if latest.screen_pixels.len() < 252 {
-                            latest.screen_pixels.resize(252, 0);
-                        }
-                        latest.screen_pixels[idx] = next_v;
+    if let Some((p, draw_mode)) = pointer_draw_erase_mode(ui, &mresp) {
+        if let Some(idx) = hit_test_matrix_pixel(mrect, cell, p) {
+            if draw_mode && app.clock_brightness == 0 {
+                app.clock_brightness = 255;
+            }
+            let next_v = if draw_mode {
+                app.clock_brightness.max(1)
+            } else {
+                0
+            };
+            if app.matrix_custom_pixels[idx] != next_v
+                || app.matrix_active_mask[idx] != draw_mode
+            {
+                app.matrix_active_mask[idx] = draw_mode;
+                app.matrix_custom_pixels[idx] = next_v;
+                if let Some(ref mut latest) = app.latest_state {
+                    if latest.screen_pixels.len() < 252 {
+                        latest.screen_pixels.resize(252, 0);
                     }
-                    app.send_command(HostCommand::SetClockDisplay {
-                        segments: None,
-                        replace: None,
-                        pixels: Some(app.matrix_custom_pixels.clone()),
-                        led_frame: None,
-                        brightness: Some(app.clock_brightness),
-                        scale_brightness: None,
-                        text: None,
-                    });
+                    latest.screen_pixels[idx] = next_v;
                 }
+                app.send_command(HostCommand::SetClockDisplay {
+                    segments: None,
+                    replace: None,
+                    pixels: Some(app.matrix_custom_pixels.clone()),
+                    led_frame: None,
+                    brightness: Some(app.clock_brightness),
+                    scale_brightness: None,
+                    text: None,
+                });
             }
         }
     }
@@ -645,55 +645,13 @@ pub fn render_matrix_21x12_faceplate(
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if enter || ui.button("Вывести").clicked() {
             let txt = app.matrix_text_input.clone();
-            if !txt.is_empty() && app.clock_brightness == 0 {
-                app.clock_brightness = 255;
-            }
-            let mask_px = render_text_to_matrix_21x12(&txt, 255);
-            app.matrix_active_mask = mask_px.iter().map(|&v| v > 0).collect();
-            app.matrix_custom_pixels = render_text_to_matrix_21x12(&txt, app.clock_brightness);
-            if let Some(ref mut latest) = app.latest_state {
-                latest.screen_pixels = app.matrix_custom_pixels.clone();
-            }
-            app.send_command(HostCommand::SetClockDisplay {
-                segments: None,
-                replace: None,
-                pixels: None,
-                led_frame: None,
-                brightness: Some(app.clock_brightness),
-                scale_brightness: None,
-                text: Some(txt),
-            });
+            apply_matrix_text(app, &txt);
         }
         for preset in ["19:30", "+24°", "-05°", ""] {
             let lbl = if preset.is_empty() { "Погасить" } else { preset };
             if ui.button(lbl).clicked() {
                 app.matrix_text_input = preset.to_string();
-                let br = if preset.is_empty() {
-                    app.matrix_active_mask.fill(false);
-                    app.matrix_custom_pixels.fill(0);
-                    0
-                } else {
-                    if app.clock_brightness == 0 {
-                        app.clock_brightness = 255;
-                    }
-                    let mask_px = render_text_to_matrix_21x12(preset, 255);
-                    app.matrix_active_mask = mask_px.iter().map(|&v| v > 0).collect();
-                    app.matrix_custom_pixels =
-                        render_text_to_matrix_21x12(preset, app.clock_brightness);
-                    app.clock_brightness
-                };
-                if let Some(ref mut latest) = app.latest_state {
-                    latest.screen_pixels = app.matrix_custom_pixels.clone();
-                }
-                app.send_command(HostCommand::SetClockDisplay {
-                    segments: None,
-                    replace: None,
-                    pixels: None,
-                    led_frame: None,
-                    brightness: Some(br),
-                    scale_brightness: None,
-                    text: Some(preset.to_string()),
-                });
+                apply_matrix_text(app, preset);
             }
         }
         if ui.button("Волна").clicked() {

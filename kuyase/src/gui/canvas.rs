@@ -1,12 +1,10 @@
-pub use crate::gui::display_geom::{
+use crate::gui::display_geom::{
     board_enclosure_shape, board_has_matrix_21x12, board_has_segment_clock,
-    build_local_segments_from_text, circle_enclosure_layout, circle_puck_subtype,
-    clock_segment_lines, default_board_ring_leds, doa_angle_from_pointer, enclosure_button_pos,
-    enclosure_button_targets, enclosure_hover_inspector_text, enclosure_inspector_text,
-    hit_test_clock_segment, hit_test_enclosure_target, hit_test_matrix_pixel, led_ring_position,
-    mango_enclosure_layout, render_text_to_matrix_21x12, segment_brightness,
-    squircle_ring_position, CircleEnclosureLayout, CirclePuckSubtype, EnclosureHitTarget,
-    EnclosureShape, MangoEnclosureLayout,
+    circle_enclosure_layout, circle_puck_subtype, cucumber_ring_led_pos, default_board_ring_leds,
+    enclosure_button_pos, enclosure_hover_inspector_text, hit_test_enclosure_target,
+    led_ring_position, mango_battery_led_rgb, mango_enclosure_layout, orion_ambilight_led_pos,
+    orion_ring_led_pos, station2_light_panel_dot_pos, station2_light_panel_rect, CirclePuckSubtype,
+    EnclosureHitTarget, EnclosureShape,
 };
 use crate::gui::faceplates::{
     render_aux_logo_strip, render_display_inspector_bar, render_matrix_21x12_faceplate,
@@ -162,6 +160,24 @@ fn draw_cap_touch_button(
                 fg,
             );
         }
+        "bt" => {
+            painter.text(
+                pos,
+                egui::Align2::CENTER_CENTER,
+                "BT",
+                egui::FontId::monospace(9.5),
+                fg,
+            );
+        }
+        "next" => {
+            painter.text(
+                pos,
+                egui::Align2::CENTER_CENTER,
+                ">|",
+                egui::FontId::monospace(9.5),
+                fg,
+            );
+        }
         "action" => {
             painter.circle_stroke(pos, 4.2, Stroke::new(1.6, fg));
         }
@@ -240,8 +256,7 @@ fn render_circle_puck_enclosure(
             let ring_count = st
                 .ring_leds
                 .max(st.ring_pixels.len())
-                .max(default_board_ring_leds(board_slug))
-                .max(16);
+                .max(default_board_ring_leds(board_slug));
             for idx in 0..ring_count {
                 let rgb = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
                 let pos = led_ring_position(center, layout.ring_r, idx, ring_count);
@@ -319,8 +334,7 @@ fn render_circle_puck_enclosure(
             let ring_count = st
                 .ring_leds
                 .max(st.ring_pixels.len())
-                .max(default_board_ring_leds(board_slug))
-                .max(6);
+                .max(default_board_ring_leds(board_slug));
             let default_rgb = if board_slug == "bergamot" {
                 [135, 35, 255]
             } else {
@@ -348,8 +362,7 @@ fn render_circle_puck_enclosure(
             let ring_count = st
                 .ring_leds
                 .max(st.ring_pixels.len())
-                .max(default_board_ring_leds(board_slug))
-                .max(6);
+                .max(default_board_ring_leds(board_slug));
             for idx in 0..ring_count {
                 let rgb = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
                 let pos = led_ring_position(center, layout.ring_r, idx, ring_count);
@@ -489,13 +502,7 @@ fn render_squircle_cube_enclosure(
 
             for idx in 0..12 {
                 let rgb = st.logo_pixels.get(idx).copied().unwrap_or([110, 45, 220]);
-                let pos = squircle_ring_position(
-                    center,
-                    ambi_half * 0.90,
-                    ambi_corner_r * 0.90,
-                    idx,
-                    12,
-                );
+                let pos = orion_ambilight_led_pos(center, outer_r, idx);
                 draw_ring_led(painter, pos, 4.6, rgb);
             }
 
@@ -520,13 +527,7 @@ fn render_squircle_cube_enclosure(
             let ring_count = st.ring_leds.max(st.ring_pixels.len()).max(36);
             for idx in 0..ring_count {
                 let rgb = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
-                let pos = squircle_ring_position(
-                    center,
-                    cap_half * 0.87,
-                    cap_corner_r * 0.85,
-                    idx,
-                    ring_count,
-                );
+                let pos = orion_ring_led_pos(center, outer_r, idx, ring_count);
                 draw_ring_led(painter, pos, 3.2, rgb);
             }
 
@@ -611,13 +612,7 @@ fn render_squircle_cube_enclosure(
             let ring_count = st.ring_leds.max(st.ring_pixels.len()).max(24);
             for idx in 0..ring_count {
                 let rgb = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
-                let pos = squircle_ring_position(
-                    center,
-                    body_half * 0.86,
-                    corner_r * 0.85,
-                    idx,
-                    ring_count,
-                );
+                let pos = cucumber_ring_led_pos(center, outer_r, idx, ring_count);
                 draw_ring_led(painter, pos, 4.0, rgb);
             }
 
@@ -759,10 +754,7 @@ fn render_rect_light_panel_enclosure(
     }
 
     // Световая матрица 11×8 (88 LED, /dev/fb0) под сенсорной планкой
-    let grid_rect = egui::Rect::from_min_max(
-        Pos2::new(center.x - half_w * 0.84, center.y - half_h * 0.36),
-        Pos2::new(center.x + half_w * 0.84, center.y + half_h * 0.84),
-    );
+    let grid_rect = station2_light_panel_rect(center, outer_r);
     painter.rect_filled(grid_rect, 8.0, Color32::from_rgb(13, 16, 22));
     painter.rect_stroke(
         grid_rect,
@@ -770,21 +762,11 @@ fn render_rect_light_panel_enclosure(
         Stroke::new(1.0, Color32::from_rgb(40, 48, 60)),
     );
 
-    let cols = 11usize;
-    let rows = 8usize;
-    let pad_x = 9.0;
-    let pad_y = 8.0;
-    let step_x = (grid_rect.width() - pad_x * 2.0) / ((cols - 1) as f32);
-    let step_y = (grid_rect.height() - pad_y * 2.0) / ((rows - 1) as f32);
-
-    for row in 0..rows {
-        for col in 0..cols {
-            let idx = row * cols + col;
+    for row in 0..8usize {
+        for col in 0..11usize {
+            let idx = row * 11 + col;
             let rgb = st.ring_pixels.get(idx).copied().unwrap_or([95, 45, 220]);
-            let pos = Pos2::new(
-                grid_rect.left() + pad_x + (col as f32) * step_x,
-                grid_rect.top() + pad_y + (row as f32) * step_y,
-            );
+            let pos = station2_light_panel_dot_pos(grid_rect, col, row);
             draw_ring_led(painter, pos, 2.7, rgb);
         }
     }
@@ -846,40 +828,13 @@ fn render_mango_street_enclosure(
         Stroke::new(1.2, Color32::from_rgb(54, 62, 76)),
     );
 
-    let bt_hovered = hovered_target == Some(EnclosureHitTarget::MangoBluetooth);
-    painter.circle_filled(
+    draw_cap_touch_button(
+        painter,
         m.bt_pos,
-        10.5,
-        if bt_hovered {
-            Color32::from_rgb(32, 48, 72)
-        } else {
-            Color32::from_rgb(20, 24, 32)
-        },
+        "bt",
+        hovered_target == Some(EnclosureHitTarget::MangoBluetooth),
+        st.mics_muted,
     );
-    painter.circle_stroke(
-        m.bt_pos,
-        10.5,
-        Stroke::new(
-            if bt_hovered { 1.6 } else { 1.0 },
-            if bt_hovered {
-                Color32::from_rgb(110, 195, 255)
-            } else {
-                Color32::from_rgb(56, 65, 82)
-            },
-        ),
-    );
-    painter.text(
-        m.bt_pos,
-        egui::Align2::CENTER_CENTER,
-        "BT",
-        egui::FontId::monospace(9.5),
-        if bt_hovered {
-            Color32::from_rgb(215, 238, 255)
-        } else {
-            Color32::from_rgb(138, 162, 194)
-        },
-    );
-
     draw_cap_touch_button(
         painter,
         m.minus_pos,
@@ -894,39 +849,12 @@ fn render_mango_street_enclosure(
         hovered_target == Some(EnclosureHitTarget::Button("volume_up")),
         st.mics_muted,
     );
-
-    let next_hovered = hovered_target == Some(EnclosureHitTarget::MangoNextTrack);
-    painter.circle_filled(
+    draw_cap_touch_button(
+        painter,
         m.next_pos,
-        10.5,
-        if next_hovered {
-            Color32::from_rgb(32, 46, 66)
-        } else {
-            Color32::from_rgb(20, 24, 32)
-        },
-    );
-    painter.circle_stroke(
-        m.next_pos,
-        10.5,
-        Stroke::new(
-            if next_hovered { 1.6 } else { 1.0 },
-            if next_hovered {
-                Color32::from_rgb(110, 195, 255)
-            } else {
-                Color32::from_rgb(56, 65, 82)
-            },
-        ),
-    );
-    painter.text(
-        m.next_pos,
-        egui::Align2::CENTER_CENTER,
-        ">|",
-        egui::FontId::monospace(9.5),
-        if next_hovered {
-            Color32::from_rgb(215, 238, 255)
-        } else {
-            Color32::from_rgb(148, 162, 184)
-        },
+        "next",
+        hovered_target == Some(EnclosureHitTarget::MangoNextTrack),
+        st.mics_muted,
     );
 
     // Центральный круговой логотип Алисы «oknix» (/dev/fb1, 3 RGBW LED AW21012)
@@ -985,13 +913,7 @@ fn render_mango_street_enclosure(
 
     // Линейная шкала из 4 светодиодов заряда АКБ (/dev/fb0, mango:*:ring1..4, AW9110)
     for (idx, &pos) in m.batt_led_positions.iter().enumerate() {
-        let default_batt = if idx < 3 {
-            [215, 232, 255]
-        } else {
-            [0, 0, 0]
-        };
-        let rgb = st.ring_pixels.get(idx).copied().unwrap_or(default_batt);
-        draw_ring_led(painter, pos, 3.8, rgb);
+        draw_ring_led(painter, pos, 3.8, mango_battery_led_rgb(&st.ring_pixels, idx));
     }
 
     // Разъём USB-C PD (IP2366) справа от 4 индикаторов заряда
@@ -1301,10 +1223,11 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                             ui.allocate_exact_size(canvas_size, Sense::click_and_drag());
                         let painter = ui.painter_at(rect);
 
-                        let hovered_target = response
+                        let hover_ptr = response
                             .hover_pos()
-                            .or_else(|| response.interact_pointer_pos())
-                            .and_then(|ptr| hit_test_enclosure_target(&board_slug, rect, ptr));
+                            .or_else(|| response.interact_pointer_pos());
+                        let hovered_target =
+                            hover_ptr.and_then(|ptr| hit_test_enclosure_target(&board_slug, rect, ptr));
 
                         if response.hovered() || response.dragged() {
                             match hovered_target {
@@ -1324,10 +1247,7 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                         }
 
                         if response.clicked() {
-                            if let Some(target) = response
-                                .interact_pointer_pos()
-                                .and_then(|ptr| hit_test_enclosure_target(&board_slug, rect, ptr))
-                            {
+                            if let Some(target) = hovered_target {
                                 match target {
                                     EnclosureHitTarget::Button(btn) => {
                                         app.send_command(HostCommand::PressButton {
@@ -1386,12 +1306,7 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                                 .take(4)
                                                 .all(|px| px[0] > 0 || px[1] > 0 || px[2] > 0);
                                         let next_ring = if all_lit {
-                                            vec![
-                                                [215, 232, 255],
-                                                [215, 232, 255],
-                                                [215, 232, 255],
-                                                [0, 0, 0],
-                                            ]
+                                            (0..4).map(|idx| mango_battery_led_rgb(&[], idx)).collect()
                                         } else {
                                             vec![[235, 245, 255]; 4]
                                         };
@@ -1421,10 +1336,7 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                 }
                             }
                         } else if response.dragged() {
-                            if let Some(EnclosureHitTarget::DoaAzimuth(angle)) = response
-                                .interact_pointer_pos()
-                                .and_then(|ptr| hit_test_enclosure_target(&board_slug, rect, ptr))
-                            {
+                            if let Some(EnclosureHitTarget::DoaAzimuth(angle)) = hovered_target {
                                 app.doa_slider = angle;
                                 app.send_command(HostCommand::SetSensor {
                                     doa_angle: Some(angle),
@@ -1477,9 +1389,6 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                         }
 
                         ui.add_space(4.0);
-                        let hover_ptr = response
-                            .hover_pos()
-                            .or_else(|| response.interact_pointer_pos());
                         let (inspector_txt, is_active_hover) = enclosure_hover_inspector_text(
                             &board_slug,
                             rect,

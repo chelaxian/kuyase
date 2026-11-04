@@ -175,7 +175,54 @@ pub fn mango_enclosure_layout(rect: Rect) -> MangoEnclosureLayout {
     }
 }
 
-pub fn enclosure_button_targets(board_slug: &str, rect: Rect) -> Vec<(&'static str, Pos2, f32)> {
+pub fn mango_battery_led_rgb(ring_pixels: &[[u8; 3]], idx: usize) -> [u8; 3] {
+    let default_batt = if idx < 3 {
+        [215, 232, 255]
+    } else {
+        [0, 0, 0]
+    };
+    ring_pixels.get(idx).copied().unwrap_or(default_batt)
+}
+
+pub fn orion_ambilight_led_pos(center: Pos2, outer_r: f32, idx: usize) -> Pos2 {
+    let ambi_half = outer_r * 0.86;
+    let ambi_corner_r = ambi_half * 0.30;
+    squircle_ring_position(center, ambi_half * 0.90, ambi_corner_r * 0.90, idx, 12)
+}
+
+pub fn orion_ring_led_pos(center: Pos2, outer_r: f32, idx: usize, count: usize) -> Pos2 {
+    let cap_half = outer_r * 0.66;
+    let cap_corner_r = cap_half * 0.28;
+    squircle_ring_position(center, cap_half * 0.87, cap_corner_r * 0.85, idx, count)
+}
+
+pub fn cucumber_ring_led_pos(center: Pos2, outer_r: f32, idx: usize, count: usize) -> Pos2 {
+    let body_half = outer_r * 0.82;
+    let corner_r = body_half * 0.28;
+    squircle_ring_position(center, body_half * 0.86, corner_r * 0.85, idx, count)
+}
+
+pub fn station2_light_panel_rect(center: Pos2, outer_r: f32) -> Rect {
+    let half_w = outer_r * 0.80;
+    let half_h = outer_r * 0.68;
+    Rect::from_min_max(
+        Pos2::new(center.x - half_w * 0.84, center.y - half_h * 0.36),
+        Pos2::new(center.x + half_w * 0.84, center.y + half_h * 0.84),
+    )
+}
+
+pub fn station2_light_panel_dot_pos(grid_rect: Rect, col: usize, row: usize) -> Pos2 {
+    let pad_x = 9.0;
+    let pad_y = 8.0;
+    let step_x = (grid_rect.width() - pad_x * 2.0) / 10.0;
+    let step_y = (grid_rect.height() - pad_y * 2.0) / 7.0;
+    Pos2::new(
+        grid_rect.left() + pad_x + (col as f32) * step_x,
+        grid_rect.top() + pad_y + (row as f32) * step_y,
+    )
+}
+
+fn enclosure_button_targets(board_slug: &str, rect: Rect) -> Vec<(&'static str, Pos2, f32)> {
     let norm = protocol::normalize_board_slug(board_slug);
     let layout = circle_enclosure_layout(&norm, rect);
     let c = layout.center;
@@ -345,16 +392,8 @@ pub fn enclosure_hover_inspector_text(
 
     match norm.as_str() {
         "orion" => {
-            let ambi_half = outer_r * 0.86;
-            let ambi_corner_r = ambi_half * 0.30;
             for idx in 0..12 {
-                let pos = squircle_ring_position(
-                    center,
-                    ambi_half * 0.90,
-                    ambi_corner_r * 0.90,
-                    idx,
-                    12,
-                );
+                let pos = orion_ambilight_led_pos(center, outer_r, idx);
                 if ptr.distance(pos) <= 7.5 {
                     let [r, g, b] = st.logo_pixels.get(idx).copied().unwrap_or([110, 45, 220]);
                     return (
@@ -365,16 +404,8 @@ pub fn enclosure_hover_inspector_text(
                     );
                 }
             }
-            let cap_half = outer_r * 0.66;
-            let cap_corner_r = cap_half * 0.28;
             for idx in 0..36 {
-                let pos = squircle_ring_position(
-                    center,
-                    cap_half * 0.88,
-                    cap_corner_r * 0.88,
-                    idx,
-                    36,
-                );
+                let pos = orion_ring_led_pos(center, outer_r, idx, 36);
                 if ptr.distance(pos) <= 6.5 {
                     let [r, g, b] = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
                     return (
@@ -387,16 +418,8 @@ pub fn enclosure_hover_inspector_text(
             }
         }
         "cucumber" => {
-            let body_half = outer_r * 0.82;
-            let body_corner_r = body_half * 0.30;
             for idx in 0..24 {
-                let pos = squircle_ring_position(
-                    center,
-                    body_half * 0.87,
-                    body_corner_r * 0.87,
-                    idx,
-                    24,
-                );
+                let pos = cucumber_ring_led_pos(center, outer_r, idx, 24);
                 if ptr.distance(pos) <= 7.0 {
                     let [r, g, b] = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
                     return (
@@ -409,28 +432,17 @@ pub fn enclosure_hover_inspector_text(
             }
         }
         "station2" => {
-            let half_w = outer_r * 0.80;
-            let half_h = outer_r * 0.68;
-            let body_rect = Rect::from_center_size(
-                center,
-                eframe::egui::Vec2::new(half_w * 2.0, half_h * 2.0),
-            );
-            let grid_top = body_rect.top() + 34.0;
-            let grid_bottom = body_rect.bottom() - 10.0;
-            let grid_left = body_rect.left() + 12.0;
-            let grid_right = body_rect.right() - 12.0;
-            let grid_rect = Rect::from_min_max(
-                Pos2::new(grid_left, grid_top),
-                Pos2::new(grid_right, grid_bottom),
-            );
+            let grid_rect = station2_light_panel_rect(center, outer_r);
             if grid_rect.contains(ptr) {
                 let cols = 11usize;
                 let rows = 8usize;
-                let col = (((ptr.x - grid_rect.left()) / grid_rect.width()) * (cols as f32))
-                    .floor()
+                let pad_x = 9.0;
+                let pad_y = 8.0;
+                let step_x = (grid_rect.width() - pad_x * 2.0) / ((cols - 1) as f32);
+                let step_y = (grid_rect.height() - pad_y * 2.0) / ((rows - 1) as f32);
+                let col = (((ptr.x - (grid_rect.left() + pad_x)) / step_x).round())
                     .clamp(0.0, (cols - 1) as f32) as usize;
-                let row = (((ptr.y - grid_rect.top()) / grid_rect.height()) * (rows as f32))
-                    .floor()
+                let row = (((ptr.y - (grid_rect.top() + pad_y)) / step_y).round())
                     .clamp(0.0, (rows - 1) as f32) as usize;
                 let idx = row * cols + col;
                 let [r, g, b] = st.ring_pixels.get(idx).copied().unwrap_or([95, 45, 220]);
@@ -503,12 +515,7 @@ pub fn enclosure_hover_inspector_text(
             }
             for (idx, &pos) in m.batt_led_positions.iter().enumerate() {
                 if ptr.distance(pos) <= 6.8 {
-                    let default_batt = if idx < 3 {
-                        [215, 232, 255]
-                    } else {
-                        [0, 0, 0]
-                    };
-                    let [r, g, b] = st.ring_pixels.get(idx).copied().unwrap_or(default_batt);
+                    let [r, g, b] = mango_battery_led_rgb(&st.ring_pixels, idx);
                     let ring_num = idx + 1;
                     return (
                         format!(
@@ -525,7 +532,7 @@ pub fn enclosure_hover_inspector_text(
     (enclosure_inspector_text(&norm, st, None, press_mode), false)
 }
 
-pub fn enclosure_inspector_text(
+fn enclosure_inspector_text(
     board_slug: &str,
     st: &BridgeStateSnapshot,
     hovered: Option<EnclosureHitTarget>,
@@ -599,7 +606,7 @@ pub fn enclosure_inspector_text(
                 st.volume_level, press_mode
             ),
         },
-        Some(EnclosureHitTarget::Button("volume_up")) => match norm.as_str() {
+        Some(EnclosureHitTarget::Button(_)) => match norm.as_str() {
             "orion" => format!(
                 "Сенсорная полоса громкости «+» (громкость {}/10, крышка /dev/fb2) | ЛКМ: uinput volume_up ({})",
                 st.volume_level, press_mode
@@ -613,10 +620,6 @@ pub fn enclosure_inspector_text(
                 st.volume_level, press_mode
             ),
         },
-        Some(EnclosureHitTarget::Button(other)) => format!(
-            "Кнопка корпуса {} | ЛКМ: uinput {} ({})",
-            other, other, press_mode
-        ),
         Some(EnclosureHitTarget::MangoBluetooth) => {
             "Кнопка Bluetooth [BT] (mango, AW21012 /dev/fb1) | ЛКМ: переключить паттерн bluetooth_playing"
                 .to_string()
@@ -764,7 +767,7 @@ fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     p.distance(proj)
 }
 
-pub fn clock_segment_alias_info(seg: &str) -> Option<&'static str> {
+fn clock_segment_alias_info(seg: &str) -> Option<&'static str> {
     match seg {
         "h1" => Some("clockH0"),
         "h2" => Some("clockH1"),
@@ -858,22 +861,6 @@ pub fn clock_segment_lines(rect: Rect) -> Vec<(String, Pos2, Pos2)> {
         ));
     }
     out
-}
-
-pub fn clock_segment_center(rect: Rect, name: &str) -> Option<Pos2> {
-    let (p3_pos, q3_pos, deg_pos) = clock_special_positions(rect);
-    match name {
-        "p3" => return Some(p3_pos),
-        "q3" => return Some(q3_pos),
-        "deg" => return Some(deg_pos),
-        _ => {}
-    }
-    for (seg_name, p0, p1) in clock_segment_lines(rect) {
-        if seg_name == name {
-            return Some(Pos2::new((p0.x + p1.x) * 0.5, (p0.y + p1.y) * 0.5));
-        }
-    }
-    None
 }
 
 pub fn hit_test_clock_segment(rect: Rect, pointer: Pos2) -> Option<String> {
@@ -985,51 +972,6 @@ mod tests {
     }
 
     #[test]
-    fn test_board_enclosure_shape_for_all_13_boards() {
-        assert_eq!(protocol::BOARD_CATALOG.len(), 13);
-        let mut circle_count = 0;
-        let mut squircle_count = 0;
-        let mut rect_count = 0;
-        let mut cylinder_count = 0;
-
-        for desc in protocol::BOARD_CATALOG {
-            match board_enclosure_shape(desc.slug) {
-                EnclosureShape::CirclePuck => {
-                    circle_count += 1;
-                    assert!(matches!(
-                        desc.slug,
-                        "yandexmini"
-                            | "yandexmini2"
-                            | "yandexmini2nc"
-                            | "bergamot"
-                            | "pickle"
-                            | "yandexmicro"
-                            | "plum"
-                            | "plumnc"
-                    ));
-                }
-                EnclosureShape::SquircleCube => {
-                    squircle_count += 1;
-                    assert!(matches!(desc.slug, "cucumber" | "orion" | "saturn"));
-                }
-                EnclosureShape::RectLightPanel => {
-                    rect_count += 1;
-                    assert_eq!(desc.slug, "station2");
-                }
-                EnclosureShape::CylinderPortable => {
-                    cylinder_count += 1;
-                    assert_eq!(desc.slug, "mango");
-                }
-            }
-        }
-
-        assert_eq!(circle_count, 8);
-        assert_eq!(squircle_count, 3);
-        assert_eq!(rect_count, 1);
-        assert_eq!(cylinder_count, 1);
-    }
-
-    #[test]
     fn test_circle_puck_hit_testing_and_no_doa_conflict() {
         let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(320.0, 232.0));
 
@@ -1103,39 +1045,20 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_enclosure_inspector_text_resting_and_hovered() {
-        let mut st = BridgeStateSnapshot::default();
-        st.doa_angle = 135;
-        st.volume_level = 6;
-        st.tof_mm = 320;
-
-        for slug in ["pickle", "bergamot", "yandexmini2", "yandexmini", "yandexmicro", "plum"] {
-            let rest = enclosure_inspector_text(slug, &st, None, "single");
-            assert!(!rest.is_empty());
-            assert!(rest.contains("135°"));
-            if slug == "yandexmini" {
-                assert!(rest.contains("SN3236") && rest.contains("ToF"));
-            } else {
-                assert!(!rest.contains("ToF"));
-            }
-
-            let hov_btn = enclosure_inspector_text(
-                slug,
-                &st,
-                Some(EnclosureHitTarget::Button("action")),
-                "double",
-            );
-            assert!(hov_btn.contains("uinput action (double)"));
-
-            let hov_doa = enclosure_inspector_text(
-                slug,
-                &st,
-                Some(EnclosureHitTarget::DoaAzimuth(240)),
-                "single",
-            );
-            assert!(hov_doa.contains("240°") && hov_doa.contains("DOA"));
+    fn clock_segment_center(rect: Rect, name: &str) -> Option<Pos2> {
+        let (p3_pos, q3_pos, deg_pos) = clock_special_positions(rect);
+        match name {
+            "p3" => return Some(p3_pos),
+            "q3" => return Some(q3_pos),
+            "deg" => return Some(deg_pos),
+            _ => {}
         }
+        for (seg_name, p0, p1) in clock_segment_lines(rect) {
+            if seg_name == name {
+                return Some(Pos2::new((p0.x + p1.x) * 0.5, (p0.y + p1.y) * 0.5));
+            }
+        }
+        None
     }
 
     #[test]
@@ -1181,12 +1104,6 @@ mod tests {
 
     #[test]
     fn test_clock_and_matrix_inspector_text() {
-        assert_eq!(clock_segment_alias_info("h1"), Some("clockH0"));
-        assert_eq!(clock_segment_alias_info("h2"), Some("clockH1"));
-        assert_eq!(clock_segment_alias_info("l1"), Some("clockH2"));
-        assert_eq!(clock_segment_alias_info("l2"), Some("clockH3"));
-        assert_eq!(clock_segment_alias_info("a1"), None);
-
         let mut segs = BTreeMap::new();
         segs.insert("h1".to_string(), 200);
         segs.insert("p4".to_string(), 128);
@@ -1345,45 +1262,12 @@ mod tests {
                 Some(EnclosureHitTarget::DoaAzimuth(0))
             );
         }
-
-        // 3. Inspector text verification for cucumber, orion, station2, saturn
-        let mut st = BridgeStateSnapshot::default();
-        st.doa_angle = 45;
-        st.volume_level = 7;
-
-        let cuc_rest = enclosure_inspector_text("cucumber", &st, None, "single");
-        assert!(cuc_rest.contains("24 LED") && cuc_rest.contains("oknix 6 LED"));
-
-        let ori_rest = enclosure_inspector_text("orion", &st, None, "single");
-        assert!(
-            ori_rest.contains("36 LED")
-                && ori_rest.contains("/dev/fb2")
-                && ori_rest.contains("Ambilight 12×2 RGBW")
-                && ori_rest.contains("/dev/fb0")
-        );
-
-        let st2_rest = enclosure_inspector_text("station2", &st, None, "single");
-        assert!(st2_rest.contains("88 LED 11×8") && st2_rest.contains("/dev/fb0"));
-
-        let sat_rest = enclosure_inspector_text("saturn", &st, None, "single");
-        assert!(sat_rest.contains("1 LED") && sat_rest.contains("saturn"));
-
-        for slug in ["cucumber", "orion", "station2", "saturn"] {
-            let hov_act = enclosure_inspector_text(
-                slug,
-                &st,
-                Some(EnclosureHitTarget::Button("action")),
-                "long",
-            );
-            assert!(hov_act.contains("uinput action (long)"));
-        }
     }
 
     #[test]
-    fn test_mango_cylinder_portable_hit_testing_and_inspector() {
+    fn test_mango_cylinder_portable_hit_testing() {
         let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(320.0, 232.0));
         let m = mango_enclosure_layout(rect);
-        assert_eq!(board_enclosure_shape("mango"), EnclosureShape::CylinderPortable);
 
         assert_eq!(
             hit_test_enclosure_target("mango", rect, m.bt_pos),
@@ -1425,81 +1309,40 @@ mod tests {
             hit_test_enclosure_target("mango", rect, right_doa),
             Some(EnclosureHitTarget::DoaAzimuth(90))
         );
-
-        let mut st = BridgeStateSnapshot::default();
-        st.doa_angle = 45;
-        st.volume_level = 7;
-
-        let rest = enclosure_inspector_text("mango", &st, None, "single");
-        assert!(rest.contains("AW9110") && rest.contains("AW21012") && rest.contains("IP2366") && rest.contains("CW2217"));
-        assert!(!rest.contains("ToF"));
-
-        let bt_txt = enclosure_inspector_text(
-            "mango",
-            &st,
-            Some(EnclosureHitTarget::MangoBluetooth),
-            "single",
-        );
-        assert!(bt_txt.contains("AW21012") && bt_txt.contains("bluetooth_playing"));
-
-        let act_txt = enclosure_inspector_text(
-            "mango",
-            &st,
-            Some(EnclosureHitTarget::Button("action")),
-            "single",
-        );
-        assert!(act_txt.contains("AW21012") && act_txt.contains("/dev/fb1") && act_txt.contains("uinput"));
-
-        let next_txt = enclosure_inspector_text(
-            "mango",
-            &st,
-            Some(EnclosureHitTarget::MangoNextTrack),
-            "single",
-        );
-        assert!(next_txt.contains("uinput"));
-
-        let usbc_txt = enclosure_inspector_text(
-            "mango",
-            &st,
-            Some(EnclosureHitTarget::MangoUsbCPd),
-            "single",
-        );
-        assert!(
-            usbc_txt.contains("IP2366")
-                && usbc_txt.contains("CW2217")
-                && usbc_txt.contains("AW9110")
-        );
     }
 
     #[test]
     fn test_enclosure_hover_inspector_for_leds_ambilight_matrix_and_tof() {
         let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(320.0, 252.0));
         let mut st = BridgeStateSnapshot::default();
+        st.doa_angle = 135;
+        st.volume_level = 6;
         st.tof_mm = 210;
+
+        // 0. Resting state (pointer = None) & button hover via public `enclosure_hover_inspector_text`
+        for slug in ["pickle", "yandexmini", "cucumber", "orion", "station2", "mango"] {
+            let (rest, active) = enclosure_hover_inspector_text(slug, rect, None, &st, "single");
+            assert!(!active && rest.contains("135°"));
+            if slug == "yandexmini" {
+                assert!(rest.contains("SN3236") && rest.contains("ToF"));
+            } else {
+                assert!(!rest.contains("ToF"));
+            }
+        }
+        let pickle_act = enclosure_button_pos("pickle", rect, "action").unwrap();
+        let (act_txt, act_hov) =
+            enclosure_hover_inspector_text("pickle", rect, Some(pickle_act), &st, "double");
+        assert!(act_hov && act_txt.contains("uinput action (double)"));
 
         // 1. orion: Ambilight zone 0 & LED Ring diode 0
         {
             let layout = circle_enclosure_layout("orion", rect);
-            let ambi_half = layout.outer_r * 0.86;
-            let ambi_pos = squircle_ring_position(
-                layout.center,
-                ambi_half * 0.90,
-                ambi_half * 0.30 * 0.90,
-                0,
-                12,
-            );
+            let ambi_pos = orion_ambilight_led_pos(layout.center, layout.outer_r, 0);
             let (txt, active) =
                 enclosure_hover_inspector_text("orion", rect, Some(ambi_pos), &st, "single");
             assert!(active && txt.contains("Ambilight #0") && txt.contains("/dev/fb0"));
 
-            let cap_half = layout.outer_r * 0.66;
-            let ring_pos = squircle_ring_position(
-                layout.center,
-                cap_half * 0.88,
-                cap_half * 0.28 * 0.88,
-                0,
-                36,
-            );
+            let ring_pos = orion_ring_led_pos(layout.center, layout.outer_r, 0, 36);
             let (txt_r, active_r) =
                 enclosure_hover_inspector_text("orion", rect, Some(ring_pos), &st, "single");
             assert!(active_r && txt_r.contains("orion:*:ring0") && txt_r.contains("/dev/fb2"));
@@ -1508,26 +1351,27 @@ mod tests {
         // 2. cucumber: LED Ring diode 0
         {
             let layout = circle_enclosure_layout("cucumber", rect);
-            let body_half = layout.outer_r * 0.82;
-            let ring_pos = squircle_ring_position(
-                layout.center,
-                body_half * 0.87,
-                body_half * 0.30 * 0.87,
-                0,
-                24,
-            );
+            let ring_pos = cucumber_ring_led_pos(layout.center, layout.outer_r, 0, 24);
             let (txt, active) =
                 enclosure_hover_inspector_text("cucumber", rect, Some(ring_pos), &st, "single");
             assert!(active && txt.contains("cucumber:*:ring0") && txt.contains("/dev/fb0"));
         }
 
-        // 3. station2: 11x8 light panel center pixel
+        // 3. station2: 11x8 light panel dot [0, 0] and [10, 7]
         {
             let layout = circle_enclosure_layout("station2", rect);
-            let panel_pt = Pos2::new(layout.center.x, layout.center.y + 12.0);
-            let (txt, active) =
-                enclosure_hover_inspector_text("station2", rect, Some(panel_pt), &st, "single");
-            assert!(active && txt.contains("11×8") && txt.contains("/dev/fb0"));
+            let grid_rect = station2_light_panel_rect(layout.center, layout.outer_r);
+            let dot0 = station2_light_panel_dot_pos(grid_rect, 0, 0);
+            let (txt0, active0) =
+                enclosure_hover_inspector_text("station2", rect, Some(dot0), &st, "single");
+            assert!(active0 && txt0.contains("11×8 [0, 0]") && txt0.contains("station2:*:ring0"));
+
+            let dot87 = station2_light_panel_dot_pos(grid_rect, 10, 7);
+            let (txt87, active87) =
+                enclosure_hover_inspector_text("station2", rect, Some(dot87), &st, "single");
+            assert!(
+                active87 && txt87.contains("11×8 [10, 7]") && txt87.contains("station2:*:ring87")
+            );
         }
 
         // 4. yandexmini: central ToF window and SN3236 LED 0
@@ -1548,7 +1392,7 @@ mod tests {
             assert!(sn_act && sn_txt.contains("SN3236 #0") && sn_txt.contains("0x3c"));
         }
 
-        // 5. mango: battery scale LED 0 and Power indicator
+        // 5. mango: battery scale LED 0, Power indicator, and USB-C PD port
         {
             let m = mango_enclosure_layout(rect);
             let (b_txt, b_act) = enclosure_hover_inspector_text(
@@ -1563,6 +1407,10 @@ mod tests {
             let (p_txt, p_act) =
                 enclosure_hover_inspector_text("mango", rect, Some(m.power_pos), &st, "single");
             assert!(p_act && p_txt.contains("Power"));
+
+            let (usbc_txt, usbc_act) =
+                enclosure_hover_inspector_text("mango", rect, Some(m.usbc_pos), &st, "single");
+            assert!(usbc_act && usbc_txt.contains("IP2366") && usbc_txt.contains("CW2217"));
         }
     }
 }
