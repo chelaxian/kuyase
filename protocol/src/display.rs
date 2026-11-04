@@ -9,46 +9,101 @@ pub const PLUM_CLOCK_EXTRA_SYMS: [&str; 8] = ["p3", "q3", "h1", "h2", "m1", "l1"
 
 pub const COMPACT_32_CLOCK_EXTRA_SYMS: [&str; 4] = ["p3", "q3", "m1", "deg"];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClockDisplayProfile {
+    pub segment_count: usize,
+    pub zero_indexed_digits: bool,
+    pub hyphenated_sysfs: bool,
+    pub extra_syms: &'static [&'static str],
+    pub central_sep_names: [&'static str; 3],
+    pub summary_label: &'static str,
+    pub header_label: &'static str,
+    pub tooltip: &'static str,
+}
+
+/// Возвращает дескриптор профиля Сегментных часов (`Segment Clock`) для заданного Профиля платы (`Board Profile`).
+pub fn board_clock_profile(board_slug: &str) -> ClockDisplayProfile {
+    match crate::normalize_board_slug(board_slug).as_str() {
+        "plum" => ClockDisplayProfile {
+            segment_count: 36,
+            zero_indexed_digits: true,
+            hyphenated_sysfs: false,
+            extra_syms: &PLUM_CLOCK_EXTRA_SYMS,
+            central_sep_names: ["DH", "DL", "DM"],
+            summary_label: "36 сегментов (A0..G3, H0..H3, DH, DL, DM, DEGREE)",
+            header_label: "7-сегментный дисплей (36 сегментов) (?)",
+            tooltip: "36-сегментный индикатор часов Станции Лайт 2 (/sys/class/leds/plum:white:clock*):\n\
+                      • Разряды 0..3 (28 сегментов): clockA0..clockG3 (a1..g4)\n\
+                      • Надстрочные сегменты разрядов (4 сегмента): clockH0..clockH3 (h1, h2, l1, l2)\n\
+                      • Центральный разделитель между 2-й и 3-й цифрами (3 сегмента): clockDH (p3), clockDL (q3), clockDM (m1)\n\
+                      • Символ градуса (1 сегмент): clockDEGREE (deg)",
+        },
+        "yandexmini2" => ClockDisplayProfile {
+            segment_count: 32,
+            zero_indexed_digits: false,
+            hyphenated_sysfs: false,
+            extra_syms: &COMPACT_32_CLOCK_EXTRA_SYMS,
+            central_sep_names: ["PLUS1", "PLUS2", "MINUS"],
+            summary_label: "32 сегмента (A1..G4, PLUS1, PLUS2, MINUS, DEGREE)",
+            header_label: "7-сегментный дисплей (32 сегмента) (?)",
+            tooltip: "32-сегментный индикатор часов Станции Мини 2 (/sys/class/leds/mini2:white:clock*):\n\
+                      • Разряды 1..4 (28 сегментов): clockA1..clockG4 (a1..g4)\n\
+                      • Центральный разделитель между 2-й и 3-й цифрами (3 сегмента): clockPLUS1 (p3), clockPLUS2 (q3), clockMINUS (m1)\n\
+                      • Символ градуса (1 сегмент): clockDEGREE (deg)",
+        },
+        "bergamot" | "pickle" => ClockDisplayProfile {
+            segment_count: 32,
+            zero_indexed_digits: true,
+            hyphenated_sysfs: false,
+            extra_syms: &COMPACT_32_CLOCK_EXTRA_SYMS,
+            central_sep_names: ["DH", "DL", "DM"],
+            summary_label: "32 сегмента (A0..G3, DH, DL, DM, DEGREE)",
+            header_label: "7-сегментный дисплей (32 сегмента) (?)",
+            tooltip: "32-сегментный индикатор часов (/sys/class/leds/<prefix>:white:clock*):\n\
+                      • Разряды 0..3 (28 сегментов): clockA0..clockG3 (a1..g4)\n\
+                      • Центральный разделитель между 2-й и 3-й цифрами (3 сегмента): clockDH (p3), clockDL (q3), clockDM (m1)\n\
+                      • Символ градуса (1 сегмент): clockDEGREE (deg)",
+        },
+        _ => ClockDisplayProfile {
+            segment_count: 45,
+            zero_indexed_digits: false,
+            hyphenated_sysfs: true,
+            extra_syms: &CLOCK_EXTRA_SYMS,
+            central_sep_names: ["p3", "q3", "m1"],
+            summary_label: "45 сегментов (a1..g4, p3..q7, h1..l2, deg)",
+            header_label: "7-сегментный дисплей (45 сегментов) (?)",
+            tooltip: "45-сегментный индикатор часов и символов (/sys/class/leds/cucumber:white:clock-*):\n\
+                      • Разряды 1..4 (28 сегментов): a1..g1, a2..g2, a3..g3, a4..g4\n\
+                      • Надстрочные и подстрочные маркеры разрядов (8 сегментов): p4..p7 (верх), q4..q7 (низ)\n\
+                      • Центральное двоеточие (2 сегмента): p3 (верхняя точка), q3 (нижняя точка)\n\
+                      • Левый знаковый блок (6 сегментов): h1, h2, m1, m2, l1, l2\n\
+                      • Символ градуса (1 сегмент): deg",
+        },
+    }
+}
+
 /// Возвращает канонический список всех 45 сегментов часов в фиксированном порядке:
 /// `a1..g1`, `a2..g2`, `a3..g3`, `a4..g4` (28) + `p3..deg` (17).
 pub fn canonical_clock_segment_names() -> Vec<String> {
-    let mut names = Vec::with_capacity(45);
-    for pos in 1..=4 {
-        for part in ["a", "b", "c", "d", "e", "f", "g"] {
-            names.push(format!("{}{}", part, pos));
-        }
-    }
-    for sym in CLOCK_EXTRA_SYMS {
-        names.push(sym.to_string());
-    }
-    names
+    board_clock_segment_names("cucumber")
 }
 
 /// Возвращает общее число физических сегментов часов для заданного Профиля платы (`Board Profile`):
 /// `45` для `cucumber`, `36` для `plum`, `32` для `bergamot`, `pickle`, `yandexmini2`.
 pub fn board_clock_segment_count(board_slug: &str) -> usize {
-    match crate::normalize_board_slug(board_slug).as_str() {
-        "plum" => 36,
-        "bergamot" | "pickle" | "yandexmini2" => 32,
-        _ => 45,
-    }
+    board_clock_profile(board_slug).segment_count
 }
 
 /// Возвращает список активных канонических ключей сегментов для заданного Профиля платы (`Board Profile`).
 pub fn board_clock_segment_names(board_slug: &str) -> Vec<String> {
-    let norm = crate::normalize_board_slug(board_slug);
-    let extras: &[&str] = match norm.as_str() {
-        "plum" => &PLUM_CLOCK_EXTRA_SYMS,
-        "bergamot" | "pickle" | "yandexmini2" => &COMPACT_32_CLOCK_EXTRA_SYMS,
-        _ => &CLOCK_EXTRA_SYMS,
-    };
-    let mut names = Vec::with_capacity(28 + extras.len());
+    let profile = board_clock_profile(board_slug);
+    let mut names = Vec::with_capacity(28 + profile.extra_syms.len());
     for pos in 1..=4 {
         for part in ["a", "b", "c", "d", "e", "f", "g"] {
             names.push(format!("{}{}", part, pos));
         }
     }
-    for &sym in extras {
+    for &sym in profile.extra_syms {
         names.push(sym.to_string());
     }
     names
@@ -68,14 +123,9 @@ pub fn board_has_clock_segment(board_slug: &str, canonical_seg: &str) -> bool {
     if is_canonical_digit_segment(&lower) {
         return true;
     }
-    let norm = crate::normalize_board_slug(board_slug);
-    match norm.as_str() {
-        "plum" => PLUM_CLOCK_EXTRA_SYMS.contains(&lower.as_str()),
-        "bergamot" | "pickle" | "yandexmini2" => {
-            COMPACT_32_CLOCK_EXTRA_SYMS.contains(&lower.as_str())
-        }
-        _ => CLOCK_EXTRA_SYMS.contains(&lower.as_str()),
-    }
+    board_clock_profile(board_slug)
+        .extra_syms
+        .contains(&lower.as_str())
 }
 
 /// Возвращает короткое нативное имя сегмента в прошивке (например, `"clockDM"`, `"clockMINUS"`, `"clockH0"`, `"clock-p4"`).
@@ -84,58 +134,30 @@ pub fn board_clock_native_short_name(board_slug: &str, canonical_seg: &str) -> O
         return None;
     }
     let seg = canonical_seg.trim().to_ascii_lowercase();
-    let norm = crate::normalize_board_slug(board_slug);
-    match norm.as_str() {
-        "plum" => {
-            if is_canonical_digit_segment(&seg) {
-                let bytes = seg.as_bytes();
-                let up = (bytes[0] as char).to_ascii_uppercase();
-                let idx = bytes[1] - b'1';
-                return Some(format!("clock{}{}", up, idx));
-            }
-            match seg.as_str() {
-                "h1" => Some("clockH0".to_string()),
-                "h2" => Some("clockH1".to_string()),
-                "l1" => Some("clockH2".to_string()),
-                "l2" => Some("clockH3".to_string()),
-                "p3" => Some("clockDH".to_string()),
-                "q3" => Some("clockDL".to_string()),
-                "m1" => Some("clockDM".to_string()),
-                "deg" => Some("clockDEGREE".to_string()),
-                _ => None,
-            }
-        }
-        "bergamot" | "pickle" => {
-            if is_canonical_digit_segment(&seg) {
-                let bytes = seg.as_bytes();
-                let up = (bytes[0] as char).to_ascii_uppercase();
-                let idx = bytes[1] - b'1';
-                return Some(format!("clock{}{}", up, idx));
-            }
-            match seg.as_str() {
-                "p3" => Some("clockDH".to_string()),
-                "q3" => Some("clockDL".to_string()),
-                "m1" => Some("clockDM".to_string()),
-                "deg" => Some("clockDEGREE".to_string()),
-                _ => None,
-            }
-        }
-        "yandexmini2" => {
-            if is_canonical_digit_segment(&seg) {
-                let bytes = seg.as_bytes();
-                let up = (bytes[0] as char).to_ascii_uppercase();
-                let idx = bytes[1] - b'0';
-                return Some(format!("clock{}{}", up, idx));
-            }
-            match seg.as_str() {
-                "p3" => Some("clockPLUS1".to_string()),
-                "q3" => Some("clockPLUS2".to_string()),
-                "m1" => Some("clockMINUS".to_string()),
-                "deg" => Some("clockDEGREE".to_string()),
-                _ => None,
-            }
-        }
-        _ => Some(format!("clock-{}", seg)),
+    let profile = board_clock_profile(board_slug);
+    if profile.hyphenated_sysfs {
+        return Some(format!("clock-{}", seg));
+    }
+    if is_canonical_digit_segment(&seg) {
+        let bytes = seg.as_bytes();
+        let up = (bytes[0] as char).to_ascii_uppercase();
+        let idx = if profile.zero_indexed_digits {
+            bytes[1] - b'1'
+        } else {
+            bytes[1] - b'0'
+        };
+        return Some(format!("clock{}{}", up, idx));
+    }
+    match seg.as_str() {
+        "h1" => Some("clockH0".to_string()),
+        "h2" => Some("clockH1".to_string()),
+        "l1" => Some("clockH2".to_string()),
+        "l2" => Some("clockH3".to_string()),
+        "p3" => Some(format!("clock{}", profile.central_sep_names[0])),
+        "q3" => Some(format!("clock{}", profile.central_sep_names[1])),
+        "m1" => Some(format!("clock{}", profile.central_sep_names[2])),
+        "deg" => Some("clockDEGREE".to_string()),
+        _ => None,
     }
 }
 
@@ -164,7 +186,10 @@ pub fn empty_clock_segments_map() -> BTreeMap<String, u8> {
 
 /// Нормализует каноническое (`a1..g4`, `p3..deg`) или нативное (`A0..G3`, `DH`, `DL`, `DM`,
 /// `PLUS1`, `PLUS2`, `MINUS`, `DEGREE`, `H0..H3`) имя сегмента в канонический ключ.
-pub fn normalize_clock_segment_name(name: &str) -> Option<String> {
+pub fn normalize_clock_segment_name_with_index_mode(
+    name: &str,
+    zero_indexed_digits: bool,
+) -> Option<String> {
     let mut raw = name.trim();
     if raw.is_empty() {
         return None;
@@ -211,6 +236,10 @@ pub fn normalize_clock_segment_name(name: &str) -> Option<String> {
     if lower.len() == 2 {
         let bytes = lower.as_bytes();
         if (b'a'..=b'g').contains(&bytes[0]) {
+            if zero_indexed_digits && (b'0'..=b'3').contains(&bytes[1]) {
+                let pos = (bytes[1] - b'0') + 1;
+                return Some(format!("{}{}", bytes[0] as char, pos));
+            }
             if (b'1'..=b'4').contains(&bytes[1]) {
                 return Some(lower);
             }
@@ -222,8 +251,35 @@ pub fn normalize_clock_segment_name(name: &str) -> Option<String> {
     None
 }
 
+pub fn normalize_clock_segment_name(name: &str) -> Option<String> {
+    normalize_clock_segment_name_with_index_mode(name, false)
+}
+
 pub fn is_valid_clock_segment(name: &str) -> bool {
     normalize_clock_segment_name(name).is_some()
+}
+
+fn token_implies_zero_indexed_digits(seg_raw: &str) -> bool {
+    let mut raw = seg_raw.trim();
+    if let Some((_, after_white)) = raw.split_once(":white:") {
+        raw = after_white;
+    }
+    if let Some(rest) = raw.strip_prefix("clock") {
+        if !rest.starts_with('-') && !rest.is_empty() {
+            raw = rest;
+        }
+    }
+    if matches!(raw, "DH" | "DL" | "DM" | "H0" | "H1" | "H2" | "H3") {
+        return true;
+    }
+    let lower = raw.to_ascii_lowercase();
+    if lower.len() == 2 {
+        let bytes = lower.as_bytes();
+        if (b'a'..=b'g').contains(&bytes[0]) && bytes[1] == b'0' {
+            return true;
+        }
+    }
+    false
 }
 
 /// Разбирает строку перечисления сегментов вида `"a1,b1,deg"`, `"A0,DH,DM,DEGREE"` или `"a1=255, g2=128, deg:64"`.
@@ -247,16 +303,26 @@ pub fn parse_clock_segment_spec(spec: &str, default_brightness: u8) -> Option<BT
         return None;
     }
 
+    let parsed_tokens: Vec<(&str, Option<&str>)> = tokens
+        .iter()
+        .map(|tok| {
+            if let Some((k, v)) = tok.split_once('=') {
+                (k.trim(), Some(v.trim()))
+            } else if let Some((k, v)) = tok.split_once(':') {
+                (k.trim(), Some(v.trim()))
+            } else {
+                (tok.trim(), None)
+            }
+        })
+        .collect();
+
+    let zero_indexed = parsed_tokens
+        .iter()
+        .any(|(seg_raw, _)| token_implies_zero_indexed_digits(seg_raw));
+
     let mut map = empty_clock_segments_map();
-    for tok in tokens {
-        let (seg_raw, val_opt) = if let Some((k, v)) = tok.split_once('=') {
-            (k.trim(), Some(v.trim()))
-        } else if let Some((k, v)) = tok.split_once(':') {
-            (k.trim(), Some(v.trim()))
-        } else {
-            (tok.trim(), None)
-        };
-        let canonical = normalize_clock_segment_name(seg_raw)?;
+    for (seg_raw, val_opt) in parsed_tokens {
+        let canonical = normalize_clock_segment_name_with_index_mode(seg_raw, zero_indexed)?;
         let br = if let Some(v_str) = val_opt {
             v_str.parse::<u16>().ok()?.min(255) as u8
         } else {
@@ -353,6 +419,17 @@ pub fn clock_segs_for_char(c: char) -> &'static [&'static str] {
     }
 }
 
+fn apply_plus_sign_segments(map: &mut BTreeMap<String, u8>, seg_count: usize, brightness: u8) {
+    if seg_count <= 36 {
+        map.insert("p3".to_string(), brightness);
+        map.insert("q3".to_string(), brightness);
+        map.insert("m1".to_string(), brightness);
+    } else {
+        map.insert("h1".to_string(), brightness);
+        map.insert("m1".to_string(), brightness);
+    }
+}
+
 pub fn build_segments_map_from_text_for_board(
     board_slug: &str,
     text: &str,
@@ -401,9 +478,7 @@ pub fn build_segments_map_from_text_for_board(
         {
             if seg_count <= 36 && rest_chars.len() <= 2 {
                 if sign == '+' {
-                    map.insert("p3".to_string(), brightness);
-                    map.insert("q3".to_string(), brightness);
-                    map.insert("m1".to_string(), brightness);
+                    apply_plus_sign_segments(&mut map, seg_count, brightness);
                 } else {
                     map.insert("m1".to_string(), brightness);
                 }
@@ -425,8 +500,7 @@ pub fn build_segments_map_from_text_for_board(
                 return map;
             } else if seg_count == 45 {
                 if sign == '+' {
-                    map.insert("h1".to_string(), brightness);
-                    map.insert("m1".to_string(), brightness);
+                    apply_plus_sign_segments(&mut map, seg_count, brightness);
                 } else {
                     map.insert("m1".to_string(), brightness);
                 }
@@ -476,14 +550,7 @@ pub fn build_segments_map_from_text_for_board(
         map.insert("deg".to_string(), brightness);
     }
     if plus {
-        if seg_count <= 36 {
-            map.insert("p3".to_string(), brightness);
-            map.insert("q3".to_string(), brightness);
-            map.insert("m1".to_string(), brightness);
-        } else {
-            map.insert("h1".to_string(), brightness);
-            map.insert("m1".to_string(), brightness);
-        }
+        apply_plus_sign_segments(&mut map, seg_count, brightness);
     }
     map
 }
@@ -755,7 +822,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(native_spec.get("a1"), Some(&210));
-        assert_eq!(native_spec.get("g3"), Some(&190));
+        assert_eq!(native_spec.get("g4"), Some(&190));
         assert_eq!(native_spec.get("p3"), Some(&150));
         assert_eq!(native_spec.get("q3"), Some(&140));
         assert_eq!(native_spec.get("m1"), Some(&130));
@@ -764,6 +831,13 @@ mod tests {
         assert_eq!(native_spec.get("h2"), Some(&100));
         assert_eq!(native_spec.get("l1"), Some(&90));
         assert_eq!(native_spec.get("l2"), Some(&80));
+
+        let eyes_native =
+            parse_clock_segment_spec("A0,B0,F0,G0,A3,B3,F3,G3", 230).unwrap();
+        for lit in ["a1", "b1", "f1", "g1", "a4", "b4", "f4", "g4"] {
+            assert_eq!(eyes_native.get(lit), Some(&230), "{lit} should be lit");
+        }
+        assert_eq!(eyes_native.get("a3"), Some(&0));
     }
 
     #[test]

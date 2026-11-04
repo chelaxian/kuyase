@@ -1255,12 +1255,14 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                         });
                                     }
                                     EnclosureHitTarget::MangoBluetooth => {
-                                        let enable_bt =
-                                            app.selected_led_pattern != "bluetooth_playing";
-                                        app.selected_led_pattern = if enable_bt {
-                                            "bluetooth_playing".to_string()
+                                        let enable_bt = app.selected_led_pattern
+                                            != "bluetooth_playing"
+                                            && app.selected_firmware_led_pattern
+                                                != "bluetooth_playing";
+                                        let next_pat = if enable_bt {
+                                            "bluetooth_playing"
                                         } else {
-                                            String::new()
+                                            ""
                                         };
                                         let next_logo = if enable_bt {
                                             vec![[0x20, 0x88, 0xff]; 3]
@@ -1271,9 +1273,7 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                         let latest =
                                             app.latest_state.get_or_insert_with(|| st.clone());
                                         latest.logo_pixels = next_logo;
-                                        app.send_command(HostCommand::SetLedPattern {
-                                            pattern: app.selected_led_pattern.clone(),
-                                        });
+                                        app.apply_preset_led_pattern(next_pat);
                                     }
                                     EnclosureHitTarget::MangoNextTrack => {
                                         app.send_command(HostCommand::IpcTest {

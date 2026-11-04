@@ -175,11 +175,7 @@ pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
                             let is_sel = app.selected_firmware_led_pattern.is_empty()
                                 && app.selected_led_pattern == val;
                             if ui.selectable_label(is_sel, label).clicked() {
-                                app.selected_firmware_led_pattern.clear();
-                                app.selected_led_pattern = val.to_string();
-                                app.send_command(HostCommand::SetLedPattern {
-                                    pattern: app.selected_led_pattern.clone(),
-                                });
+                                app.apply_preset_led_pattern(val);
                             }
                         }
                     });
@@ -212,11 +208,7 @@ pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
                             )
                             .clicked()
                         {
-                            app.selected_firmware_led_pattern.clear();
-                            app.selected_led_pattern.clear();
-                            app.send_command(HostCommand::SetLedPattern {
-                                pattern: String::new(),
-                            });
+                            app.apply_preset_led_pattern("");
                         }
                         if !app.firmware_led_patterns.is_empty() {
                             ui.separator();
@@ -230,11 +222,7 @@ pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
                             ui.horizontal(|ui| {
                                 ui.label(swatch);
                                 if ui.selectable_label(is_sel, &info.label).clicked() {
-                                    app.selected_firmware_led_pattern = info.id.clone();
-                                    app.selected_led_pattern = info.id.clone();
-                                    app.send_command(HostCommand::SetLedPattern {
-                                        pattern: info.id,
-                                    });
+                                    app.apply_firmware_led_pattern(&info.id);
                                 }
                             });
                         }

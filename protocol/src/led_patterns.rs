@@ -118,6 +118,13 @@ pub fn parse_led_pattern_frames(raw: &str, ring_leds: usize) -> Vec<(Vec<[u8; 3]
     frames
 }
 
+fn rgb_chroma_score(rgb: [u8; 3]) -> u32 {
+    let max_c = rgb[0].max(rgb[1]).max(rgb[2]) as u32;
+    let min_c = rgb[0].min(rgb[1]).min(rgb[2]) as u32;
+    let chroma = max_c - min_c;
+    chroma * 3 + max_c
+}
+
 pub fn extract_led_pattern_primary_rgb(raw: &str) -> Option<[u8; 3]> {
     let frames = parse_led_pattern_frames(raw, 36);
     let mut best_rgb: Option<[u8; 3]> = None;
@@ -125,10 +132,7 @@ pub fn extract_led_pattern_primary_rgb(raw: &str) -> Option<[u8; 3]> {
 
     for (px_list, _) in &frames {
         for &rgb in px_list {
-            let max_c = rgb[0].max(rgb[1]).max(rgb[2]) as u32;
-            let min_c = rgb[0].min(rgb[1]).min(rgb[2]) as u32;
-            let chroma = max_c - min_c;
-            let score = chroma * 3 + max_c;
+            let score = rgb_chroma_score(rgb);
             if best_rgb.is_none() || score > best_score {
                 best_rgb = Some(rgb);
                 best_score = score;
@@ -141,10 +145,7 @@ pub fn extract_led_pattern_primary_rgb(raw: &str) -> Option<[u8; 3]> {
             let line = raw_line.split('#').next().unwrap_or("").trim();
             for tok in line.split_whitespace() {
                 if let Some(rgb) = parse_hex_color_token(tok) {
-                    let max_c = rgb[0].max(rgb[1]).max(rgb[2]) as u32;
-                    let min_c = rgb[0].min(rgb[1]).min(rgb[2]) as u32;
-                    let chroma = max_c - min_c;
-                    let score = chroma * 3 + max_c;
+                    let score = rgb_chroma_score(rgb);
                     if best_rgb.is_none() || score > best_score {
                         best_rgb = Some(rgb);
                         best_score = score;

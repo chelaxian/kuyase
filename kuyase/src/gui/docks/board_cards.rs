@@ -1,7 +1,6 @@
 use super::{gnome_action_row, gnome_preferences_group};
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, RichText};
-use protocol::HostCommand;
 
 pub fn render_board_specific_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
     let board_slug = app.active_board_slug();
@@ -45,10 +44,7 @@ fn render_orion_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
                 ("Теплый (rgb:#FF9933)", "rgb:#FF9933"),
             ] {
                 if ui.button(lbl).clicked() {
-                    app.selected_led_pattern = pat.to_string();
-                    app.send_command(HostCommand::SetLedPattern {
-                        pattern: pat.to_string(),
-                    });
+                    app.apply_preset_led_pattern(pat);
                 }
             }
         },
@@ -135,16 +131,10 @@ fn render_sn3236_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
         true,
         |ui| {
             if ui.button("Проверка BGR (rgb:#6B0FFF)").clicked() {
-                app.selected_led_pattern = "rgb:#6B0FFF".to_string();
-                app.send_command(HostCommand::SetLedPattern {
-                    pattern: "rgb:#6B0FFF".to_string(),
-                });
+                app.apply_preset_led_pattern("rgb:#6B0FFF");
             }
             if ui.button("Авто (Quasar)").clicked() {
-                app.selected_led_pattern.clear();
-                app.send_command(HostCommand::SetLedPattern {
-                    pattern: String::new(),
-                });
+                app.apply_preset_led_pattern("");
             }
             if app.session.is_some() {
                 if ui
@@ -296,10 +286,7 @@ fn render_mango_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
                         "printf '\\x00\\xff\\x80\\x43\\x0f\\xff\\x43\\x0f\\xff' > /dev/fb1",
                     );
                 }
-                app.selected_led_pattern = "listening".to_string();
-                app.send_command(HostCommand::SetLedPattern {
-                    pattern: "listening".to_string(),
-                });
+                app.apply_preset_led_pattern("alice_pro_listening");
             }
             if ui.button("Шкала заряда 75% (3/4 LED)").clicked() && vm_on {
                 app.send_serial_command(
@@ -309,10 +296,7 @@ fn render_mango_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
                 );
             }
             if ui.button("Авто (ledfb-ring)").clicked() {
-                app.selected_led_pattern.clear();
-                app.send_command(HostCommand::SetLedPattern {
-                    pattern: String::new(),
-                });
+                app.apply_preset_led_pattern("");
                 if vm_on {
                     app.send_serial_command(
                         "for d in /sys/class/leds/mango:*:ring*; do echo 0 > \"$d/brightness\"; echo ledfb-ring > \"$d/trigger\"; done",
@@ -395,10 +379,7 @@ fn render_pickle_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
                         "printf '\\x00\\xff\\x80\\x6b\\x0f\\xff\\x00\\xff\\x80\\x6b\\x0f\\xff\\x00\\xff\\x80\\x6b\\x0f\\xff' > /dev/fb1",
                     );
                 }
-                app.selected_led_pattern = "speaking".to_string();
-                app.send_command(HostCommand::SetLedPattern {
-                    pattern: "speaking".to_string(),
-                });
+                app.apply_preset_led_pattern("alice_pro_listening");
             }
             render_sysfs_ring_action_buttons(ui, app, vm_on);
         },
@@ -407,16 +388,10 @@ fn render_pickle_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
 
 fn render_sysfs_ring_action_buttons(ui: &mut egui::Ui, app: &mut GuiAppState, vm_on: bool) {
     if ui.button("Бирюзовый (#00E5FF)").clicked() {
-        app.selected_led_pattern = "rgb:#00E5FF".to_string();
-        app.send_command(HostCommand::SetLedPattern {
-            pattern: "rgb:#00E5FF".to_string(),
-        });
+        app.apply_preset_led_pattern("rgb:#00E5FF");
     }
     if ui.button("Авто (ledfb-ring)").clicked() {
-        app.selected_led_pattern.clear();
-        app.send_command(HostCommand::SetLedPattern {
-            pattern: String::new(),
-        });
+        app.apply_preset_led_pattern("");
     }
     if vm_on {
         if ui

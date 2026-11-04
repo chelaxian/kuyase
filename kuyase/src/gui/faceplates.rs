@@ -7,7 +7,7 @@ use crate::gui::display_geom::{
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use protocol::display::{
-    board_clock_segment_count, build_segments_map_from_text_for_board, render_text_to_matrix_21x12,
+    board_clock_profile, build_segments_map_from_text_for_board, render_text_to_matrix_21x12,
 };
 use protocol::{BridgeStateSnapshot, HostCommand};
 use std::collections::BTreeMap;
@@ -212,48 +212,14 @@ pub fn render_segment_clock_faceplate(
     st: &BridgeStateSnapshot,
     bridge_online: bool,
 ) {
-    let seg_count = board_clock_segment_count(board_slug);
-    let header_label = match seg_count {
-        32 => "7-сегментный дисплей (32 сегмента) (?)",
-        36 => "7-сегментный дисплей (36 сегментов) (?)",
-        _ => "7-сегментный дисплей (45 сегментов) (?)",
-    };
-    let hover_tooltip = match protocol::normalize_board_slug(board_slug).as_str() {
-        "plum" => {
-            "36-сегментный индикатор часов Станции Лайт 2 (/sys/class/leds/plum:white:clock*):\n\
-             • Разряды 0..3 (28 сегментов): clockA0..clockG3 (a1..g4)\n\
-             • Надстрочные сегменты разрядов (4 сегмента): clockH0..clockH3 (h1, h2, l1, l2)\n\
-             • Центральный разделитель между 2-й и 3-й цифрами (3 сегмента): clockDH (p3), clockDL (q3), clockDM (m1)\n\
-             • Символ градуса (1 сегмент): clockDEGREE (deg)"
-        }
-        "yandexmini2" => {
-            "32-сегментный индикатор часов Станции Мини 2 (/sys/class/leds/mini2:white:clock*):\n\
-             • Разряды 1..4 (28 сегментов): clockA1..clockG4 (a1..g4)\n\
-             • Центральный разделитель между 2-й и 3-й цифрами (3 сегмента): clockPLUS1 (p3), clockPLUS2 (q3), clockMINUS (m1)\n\
-             • Символ градуса (1 сегмент): clockDEGREE (deg)"
-        }
-        "bergamot" | "pickle" => {
-            "32-сегментный индикатор часов (/sys/class/leds/<prefix>:white:clock*):\n\
-             • Разряды 0..3 (28 сегментов): clockA0..clockG3 (a1..g4)\n\
-             • Центральный разделитель между 2-й и 3-й цифрами (3 сегмента): clockDH (p3), clockDL (q3), clockDM (m1)\n\
-             • Символ градуса (1 сегмент): clockDEGREE (deg)"
-        }
-        _ => {
-            "45-сегментный индикатор часов и символов (/sys/class/leds/cucumber:white:clock-*):\n\
-             • Разряды 1..4 (28 сегментов): a1..g1, a2..g2, a3..g3, a4..g4\n\
-             • Надстрочные и подстрочные маркеры разрядов (8 сегментов): p4..p7 (верх), q4..q7 (низ)\n\
-             • Центральное двоеточие (2 сегмента): p3 (верхняя точка), q3 (нижняя точка)\n\
-             • Левый знаковый блок (6 сегментов): h1, h2, m1, m2, l1, l2\n\
-             • Символ градуса (1 сегмент): deg"
-        }
-    };
+    let clock_profile = board_clock_profile(board_slug);
     ui.horizontal_wrapped(|ui| {
         ui.label(
-            RichText::new(header_label)
+            RichText::new(clock_profile.header_label)
                 .small()
                 .color(Color32::from_rgb(165, 175, 190)),
         )
-        .on_hover_text(hover_tooltip);
+        .on_hover_text(clock_profile.tooltip);
         ui.separator();
         ui.label(
             RichText::new("ЛКМ: рисовать | ПКМ: стирать")

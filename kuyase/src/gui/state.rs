@@ -579,13 +579,23 @@ impl GuiAppState {
     }
 
     pub fn ensure_board_led_patterns_loaded(&mut self) {
-        if let Some(ref st) = self.latest_state {
-            if !st.available_led_patterns.is_empty() {
-                if self.firmware_led_patterns != st.available_led_patterns {
-                    self.firmware_led_patterns = st.available_led_patterns.clone();
-                    self.firmware_led_patterns_board = st.board_slug.clone();
+        let selected_norm = normalize_board_slug(&self.config.selected_board);
+        let bridge_online = self
+            .bridge
+            .as_ref()
+            .map(|b| b.is_connected())
+            .unwrap_or(false);
+        if bridge_online {
+            if let Some(ref st) = self.latest_state {
+                if !st.available_led_patterns.is_empty()
+                    && normalize_board_slug(&st.board_slug) == selected_norm
+                {
+                    if self.firmware_led_patterns != st.available_led_patterns {
+                        self.firmware_led_patterns = st.available_led_patterns.clone();
+                        self.firmware_led_patterns_board = self.config.selected_board.clone();
+                    }
+                    return;
                 }
-                return;
             }
         }
         let board = self.config.selected_board.clone();
@@ -604,6 +614,22 @@ impl GuiAppState {
                 self.selected_firmware_led_pattern.clear();
             }
         }
+    }
+
+    pub fn apply_preset_led_pattern(&mut self, preset: &str) {
+        self.selected_firmware_led_pattern.clear();
+        self.selected_led_pattern = preset.to_string();
+        self.send_command(HostCommand::SetLedPattern {
+            pattern: self.selected_led_pattern.clone(),
+        });
+    }
+
+    pub fn apply_firmware_led_pattern(&mut self, pattern_id: &str) {
+        self.selected_led_pattern.clear();
+        self.selected_firmware_led_pattern = pattern_id.to_string();
+        self.send_command(HostCommand::SetLedPattern {
+            pattern: pattern_id.to_string(),
+        });
     }
 
     pub fn start_vm(&mut self) {
@@ -1034,6 +1060,17 @@ mod tests {
         let led_signals = app.filtered_signals();
         assert_eq!(led_signals.len(), 1);
         assert!(led_signals[0].message.contains("led_trigger_conflict_count = 1"));
+
+        app.apply_firmware_led_pattern("ring/alice_pro_listening.led");
+        assert_eq!(
+            app.selected_firmware_led_pattern,
+            "ring/alice_pro_listening.led"
+        );
+        assert!(app.selected_led_pattern.is_empty());
+
+        app.apply_preset_led_pattern("rgb:#6B0FFF");
+        assert_eq!(app.selected_led_pattern, "rgb:#6B0FFF");
+        assert!(app.selected_firmware_led_pattern.is_empty());
 
         let _ = fs::remove_dir_all(&tmp);
     }

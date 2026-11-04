@@ -538,83 +538,46 @@ if [ "$LED_DRIVER" != "i2c_sn3236" ]; then
   fi
 
   if [ "$HAS_CLOCK" = "true" ]; then
+    create_clock_digit_nodes() {
+      _base_idx="$1"
+      for pos in 1 2 3 4; do
+        idx=$((pos - 1 + _base_idx))
+        for part in a b c d e f g; do
+          up=$(echo "$part" | tr 'a-g' 'A-G')
+          native="${SYSFS_PREFIX}:white:clock${up}${idx}"
+          d="/sys/class/leds/${native}"
+          mkdir -p "$d/device"
+          echo 0 > "$d/brightness"
+          echo 255 > "$d/max_brightness"
+          echo "[none]" > "$d/trigger"
+          echo "2;3;104;90;162;180;255;255" > "$d/device/brightness_scale"
+          ln -sfn "${native}" "/sys/class/leds/${SYSFS_PREFIX}:white:clock-${part}${pos}"
+        done
+      done
+    }
+    create_clock_sym_nodes() {
+      for pair in "$@"; do
+        nsym="${pair%%:*}"
+        csym="${pair#*:}"
+        native="${SYSFS_PREFIX}:white:clock${nsym}"
+        d="/sys/class/leds/${native}"
+        mkdir -p "$d"
+        echo 0 > "$d/brightness"
+        echo 255 > "$d/max_brightness"
+        echo "[none]" > "$d/trigger"
+        ln -sfn "${native}" "/sys/class/leds/${SYSFS_PREFIX}:white:clock-${csym}"
+      done
+    }
+
     if [ "$BOARD" = "plum" ]; then
-      for pos in 1 2 3 4; do
-        idx=$((pos - 1))
-        for part in a b c d e f g; do
-          up=$(echo "$part" | tr 'a-g' 'A-G')
-          native="${SYSFS_PREFIX}:white:clock${up}${idx}"
-          d="/sys/class/leds/${native}"
-          mkdir -p "$d/device"
-          echo 0 > "$d/brightness"
-          echo 255 > "$d/max_brightness"
-          echo "[none]" > "$d/trigger"
-          echo "2;3;104;90;162;180;255;255" > "$d/device/brightness_scale"
-          ln -sfn "${native}" "/sys/class/leds/${SYSFS_PREFIX}:white:clock-${part}${pos}"
-        done
-      done
-      for pair in "H0:h1" "H1:h2" "H2:l1" "H3:l2" "DH:p3" "DL:q3" "DM:m1" "DEGREE:deg"; do
-        nsym="${pair%%:*}"
-        csym="${pair#*:}"
-        native="${SYSFS_PREFIX}:white:clock${nsym}"
-        d="/sys/class/leds/${native}"
-        mkdir -p "$d"
-        echo 0 > "$d/brightness"
-        echo 255 > "$d/max_brightness"
-        echo "[none]" > "$d/trigger"
-        ln -sfn "${native}" "/sys/class/leds/${SYSFS_PREFIX}:white:clock-${csym}"
-      done
+      create_clock_digit_nodes 0
+      create_clock_sym_nodes "H0:h1" "H1:h2" "H2:l1" "H3:l2" "DH:p3" "DL:q3" "DM:m1" "DEGREE:deg"
     elif [ "$BOARD" = "bergamot" ] || [ "$BOARD" = "pickle" ]; then
-      for pos in 1 2 3 4; do
-        idx=$((pos - 1))
-        for part in a b c d e f g; do
-          up=$(echo "$part" | tr 'a-g' 'A-G')
-          native="${SYSFS_PREFIX}:white:clock${up}${idx}"
-          d="/sys/class/leds/${native}"
-          mkdir -p "$d/device"
-          echo 0 > "$d/brightness"
-          echo 255 > "$d/max_brightness"
-          echo "[none]" > "$d/trigger"
-          echo "2;3;104;90;162;180;255;255" > "$d/device/brightness_scale"
-          ln -sfn "${native}" "/sys/class/leds/${SYSFS_PREFIX}:white:clock-${part}${pos}"
-        done
-      done
-      for pair in "DH:p3" "DL:q3" "DM:m1" "DEGREE:deg"; do
-        nsym="${pair%%:*}"
-        csym="${pair#*:}"
-        native="${SYSFS_PREFIX}:white:clock${nsym}"
-        d="/sys/class/leds/${native}"
-        mkdir -p "$d"
-        echo 0 > "$d/brightness"
-        echo 255 > "$d/max_brightness"
-        echo "[none]" > "$d/trigger"
-        ln -sfn "${native}" "/sys/class/leds/${SYSFS_PREFIX}:white:clock-${csym}"
-      done
+      create_clock_digit_nodes 0
+      create_clock_sym_nodes "DH:p3" "DL:q3" "DM:m1" "DEGREE:deg"
     elif [ "$BOARD" = "yandexmini2" ]; then
-      for pos in 1 2 3 4; do
-        for part in a b c d e f g; do
-          up=$(echo "$part" | tr 'a-g' 'A-G')
-          native="${SYSFS_PREFIX}:white:clock${up}${pos}"
-          d="/sys/class/leds/${native}"
-          mkdir -p "$d/device"
-          echo 0 > "$d/brightness"
-          echo 255 > "$d/max_brightness"
-          echo "[none]" > "$d/trigger"
-          echo "2;3;104;90;162;180;255;255" > "$d/device/brightness_scale"
-          ln -sfn "${native}" "/sys/class/leds/${SYSFS_PREFIX}:white:clock-${part}${pos}"
-        done
-      done
-      for pair in "PLUS1:p3" "PLUS2:q3" "MINUS:m1" "DEGREE:deg"; do
-        nsym="${pair%%:*}"
-        csym="${pair#*:}"
-        native="${SYSFS_PREFIX}:white:clock${nsym}"
-        d="/sys/class/leds/${native}"
-        mkdir -p "$d"
-        echo 0 > "$d/brightness"
-        echo 255 > "$d/max_brightness"
-        echo "[none]" > "$d/trigger"
-        ln -sfn "${native}" "/sys/class/leds/${SYSFS_PREFIX}:white:clock-${csym}"
-      done
+      create_clock_digit_nodes 1
+      create_clock_sym_nodes "PLUS1:p3" "PLUS2:q3" "MINUS:m1" "DEGREE:deg"
     else
       for pos in 1 2 3 4; do
         for part in a b c d e f g; do

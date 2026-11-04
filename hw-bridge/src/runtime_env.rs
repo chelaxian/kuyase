@@ -1030,6 +1030,45 @@ pub fn ensure_dbus_system_config_under(root: &Path) {
     }
 }
 
+/// Synchronizes `/sys/class/leds/*clock*` nodes for 32- and 36-segment clock boards (`plum`,
+/// `bergamot`, `pickle`, `yandexmini2`) at `qemu-hw-bridge` startup so existing `.ext4` images
+/// booted without `kuyase prepare` expose only the board's real hardware clock segments.
+pub fn ensure_board_clock_sysfs_nodes_under(root: &Path, board_slug: &str) {
+    let norm = protocol::normalize_board_slug(board_slug);
+    let Some(desc) = protocol::find_board_descriptor(&norm) else {
+        return;
+    };
+    if !desc.has_clock || norm == "cucumber" {
+        return;
+    }
+    let leds_dir = root.join("sys/class/leds");
+    if !leds_dir.is_dir() {
+        return;
+    }
+    let prefix = desc.sysfs_prefix;
+    for sym in protocol::display::CLOCK_EXTRA_SYMS {
+        if !protocol::display::board_has_clock_segment(&norm, sym) {
+            let extra_dir = leds_dir.join(format!("{}:white:clock-{}", prefix, sym));
+            if let Ok(meta) = fs::symlink_metadata(&extra_dir) {
+                if meta.file_type().is_symlink() || meta.is_file() {
+                    let _ = fs::remove_file(&extra_dir);
+                } else if meta.is_dir() {
+                    let _ = fs::remove_dir_all(&extra_dir);
+                }
+            }
+        }
+    }
+    if protocol::display::board_clock_segment_count(&norm) == 32 {
+        for h_idx in 0..4 {
+            let h_link = leds_dir.join(format!("{}:white:clockH{}", prefix, h_idx));
+            if fs::symlink_metadata(&h_link).is_ok() {
+                let _ = fs::remove_file(&h_link);
+                let _ = fs::remove_dir_all(&h_link);
+            }
+        }
+    }
+}
+
 /// Prepares all guest runtime environment stubs on `qemu-hw-bridge` startup so existing
 /// `work/*-system.ext4` images support unmodified `/system/vendor/quasar/q` commands and
 /// `Full Mode` (`quasar.mode=full`) D-Bus / BlueZ initialization without rebuilding `.ext4` images.
@@ -1041,6 +1080,7 @@ pub fn prepare_runtime_environment(board_slug: &str, full_mode: bool) {
     ensure_dbus_system_config_under(root);
     ensure_unified_log_symlinks_under(root);
     ensure_platform_sysfs_nodes_under(root);
+    ensure_board_clock_sysfs_nodes_under(root, board_slug);
     ensure_linkplay_fnvram_under(root);
     ensure_quasar_cfg_dev_config_under(root);
     ensure_fallback_set_volume_sh_under(root);

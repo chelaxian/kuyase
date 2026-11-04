@@ -55,10 +55,30 @@ pub fn discover_guest_led_patterns() -> Vec<protocol::LedPatternInfo> {
     out
 }
 
-fn load_led_pattern(kind: &str, ring_leds: usize) -> Vec<(Vec<[u8; 3]>, u32)> {
+fn split_led_pattern_kind(kind: &str) -> (&str, &str, &str) {
     let trimmed = kind.trim().trim_start_matches('/');
     let stem = trimmed.trim_end_matches(".led");
     let base_stem = stem.rsplit('/').next().unwrap_or(stem);
+    (trimmed, stem, base_stem)
+}
+
+fn read_first_matching_pattern(
+    candidates: &[String],
+    leds: usize,
+) -> Option<Vec<(Vec<[u8; 3]>, u32)>> {
+    for path in candidates {
+        if let Ok(raw) = fs::read_to_string(path) {
+            let frames = parse_led_pattern_str(&raw, leds);
+            if !frames.is_empty() {
+                return Some(frames);
+            }
+        }
+    }
+    None
+}
+
+fn load_led_pattern(kind: &str, ring_leds: usize) -> Vec<(Vec<[u8; 3]>, u32)> {
+    let (trimmed, stem, base_stem) = split_led_pattern_kind(kind);
 
     let mut candidates = vec![
         format!("{}/{}", LEDPATTERNS_ROOT, trimmed),
@@ -87,13 +107,18 @@ fn load_led_pattern(kind: &str, ring_leds: usize) -> Vec<(Vec<[u8; 3]>, u32)> {
         }
     }
 
-    for path in &candidates {
-        if let Ok(raw) = fs::read_to_string(path) {
-            let frames = parse_led_pattern_str(&raw, ring_leds);
-            if !frames.is_empty() {
-                return frames;
+    if let Some(mut frames) = read_first_matching_pattern(&candidates, ring_leds) {
+        if base_stem == "mute_mics" || base_stem == "mute" {
+            let non_black: Vec<(Vec<[u8; 3]>, u32)> = frames
+                .iter()
+                .filter(|(f, _)| f.iter().any(|p| p[0] > 0 || p[1] > 0 || p[2] > 0))
+                .cloned()
+                .collect();
+            if !non_black.is_empty() {
+                frames = non_black;
             }
         }
+        return frames;
     }
 
     if base_stem == "mute_mics" || base_stem == "mute" {
@@ -136,9 +161,7 @@ fn load_ambilight_pattern(kind: &str, zones: usize) -> Vec<(Vec<[u8; 3]>, u32)> 
     if zones == 0 {
         return Vec::new();
     }
-    let trimmed = kind.trim().trim_start_matches('/');
-    let stem = trimmed.trim_end_matches(".led");
-    let base_stem = stem.rsplit('/').next().unwrap_or(stem);
+    let (_, _, base_stem) = split_led_pattern_kind(kind);
 
     let mut candidates = vec![
         format!("{}/oknix/{}.led", LEDPATTERNS_ROOT, base_stem),
@@ -160,15 +183,22 @@ fn load_ambilight_pattern(kind: &str, zones: usize) -> Vec<(Vec<[u8; 3]>, u32)> 
         candidates.push(format!("{}/ambilight/boot.led", LEDPATTERNS_ROOT));
     }
 
-    for path in &candidates {
-        if let Ok(raw) = fs::read_to_string(path) {
-            let frames = parse_led_pattern_str(&raw, zones);
-            if !frames.is_empty() {
-                return frames;
-            }
-        }
+    read_first_matching_pattern(&candidates, zones)
+        .unwrap_or_else(|| load_led_pattern(kind, zones))
+}
+
+fn build_mute_led_frame(
+    mute_frames: &[(Vec<[u8; 3]>, u32)],
+    ring_leds: usize,
+) -> Vec<[u8; 3]> {
+    if let Some((frame, _)) = mute_frames
+        .iter()
+        .rev()
+        .find(|(f, _)| f.first().copied() == Some([255, 0, 0]))
+    {
+        return frame.clone();
     }
-    load_led_pattern(kind, zones)
+    vec![[255, 0, 0]; ring_leds]
 }
 
 fn build_volume_led_frame(
@@ -275,13 +305,13 @@ pub fn sync_immediate_led_state(state: &BridgeState) {
 
     if state.mics_muted.load(Ordering::Relaxed) {
         let mute_frames = load_led_pattern("mute_mics", ring_leds);
-        let (ref px, _) = mute_frames[0];
+        let px = build_mute_led_frame(&mute_frames, ring_leds);
         let aux = if aux_zones > 0 {
             Some(vec![[180, 0, 0]; aux_zones])
         } else {
             None
         };
-        apply_native_frames(state, px.clone(), aux);
+        apply_native_frames(state, px, aux);
         return;
     }
 
@@ -411,14 +441,14 @@ pub fn spawn_native_led_animator(state: Arc<BridgeState>) {
             // 4. Отключённые микрофоны (MUTE MIC -> красное кольцо)
             if state.mics_muted.load(Ordering::Relaxed) {
                 was_active = true;
-                let (ref px, _) = mute_frames[0];
+                let px = build_mute_led_frame(&mute_frames, ring_leds);
                 let aux = if aux_zones > 0 {
                     was_aux_active = true;
                     Some(vec![[180, 0, 0]; aux_zones])
                 } else {
                     None
                 };
-                apply_native_frames(&state, px.clone(), aux);
+                apply_native_frames(&state, px, aux);
                 thread::sleep(Duration::from_millis(80));
                 continue;
             }

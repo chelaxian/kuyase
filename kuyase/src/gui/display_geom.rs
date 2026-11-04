@@ -904,13 +904,7 @@ pub fn clock_inspector_text(
     default_pwm: u8,
 ) -> String {
     let norm = protocol::normalize_board_slug(board_slug);
-    let prefix = protocol::find_board_descriptor(&norm)
-        .map(|b| b.sysfs_prefix)
-        .unwrap_or(if norm.is_empty() {
-            "cucumber"
-        } else {
-            norm.as_str()
-        });
+    let profile = protocol::display::board_clock_profile(&norm);
     if let Some(seg) = hovered_seg {
         let br = segments.get(seg).copied().unwrap_or(0);
         if let (Some(native_led), Some(short)) = (
@@ -934,36 +928,24 @@ pub fn clock_inspector_text(
                     seg, native_led, br
                 )
             }
-        } else if let Some(alias) = clock_segment_alias_info(seg) {
-            format!(
-                "Сегмент {} ({}) | /sys/class/leds/{}:white:clock-{}/brightness | PWM: {} | ЛКМ: зажечь | ПКМ: погасить",
-                seg, alias, prefix, seg, br
-            )
         } else {
+            let prefix = protocol::find_board_descriptor(&norm)
+                .map(|b| b.sysfs_prefix)
+                .unwrap_or(if norm.is_empty() {
+                    "cucumber"
+                } else {
+                    norm.as_str()
+                });
             format!(
                 "Сегмент {} | /sys/class/leds/{}:white:clock-{}/brightness | PWM: {} | ЛКМ: зажечь | ПКМ: погасить",
                 seg, prefix, seg, br
             )
         }
     } else {
-        match norm.as_str() {
-            "plum" => format!(
-                "36 сегментов (A0..G3, H0..H3, DH, DL, DM, DEGREE) | Наведите на сегмент | ЛКМ: зажечь, ПКМ: погасить (PWM: {})",
-                default_pwm
-            ),
-            "yandexmini2" => format!(
-                "32 сегмента (A1..G4, PLUS1, PLUS2, MINUS, DEGREE) | Наведите на сегмент | ЛКМ: зажечь, ПКМ: погасить (PWM: {})",
-                default_pwm
-            ),
-            "bergamot" | "pickle" => format!(
-                "32 сегмента (A0..G3, DH, DL, DM, DEGREE) | Наведите на сегмент | ЛКМ: зажечь, ПКМ: погасить (PWM: {})",
-                default_pwm
-            ),
-            _ => format!(
-                "45 сегментов (a1..g4, p3..q7, h1..l2, deg) | Наведите на сегмент | ЛКМ: зажечь, ПКМ: погасить (PWM: {})",
-                default_pwm
-            ),
-        }
+        format!(
+            "{} | Наведите на сегмент | ЛКМ: зажечь, ПКМ: погасить (PWM: {})",
+            profile.summary_label, default_pwm
+        )
     }
 }
 
