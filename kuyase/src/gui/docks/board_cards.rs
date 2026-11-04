@@ -32,6 +32,8 @@ pub fn render_board_specific_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
                 render_sn3236_card_rows(ui, app);
             } else if has_battery {
                 render_mango_card_rows(ui, app);
+            } else if board_slug == "pickle" {
+                render_pickle_card_rows(ui, app);
             } else {
                 render_generic_sysfs_ring_rows(ui, app);
             }
@@ -324,6 +326,123 @@ fn render_mango_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
                 if vm_on {
                     app.send_serial_command(
                         "for d in /sys/class/leds/mango:*:ring*; do echo 0 > \"$d/brightness\"; echo ledfb-ring > \"$d/trigger\"; done",
+                    );
+                }
+            }
+        },
+    );
+}
+
+fn render_pickle_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
+    let vm_on = app.session.is_some();
+    gnome_action_row(
+        ui,
+        "Подключаемый аккумуляторный модуль pogo-pin (/sys/devices/platform/ya_pd/*, /dev/ttyS1, 18 Вт)",
+        "Детект модуля Det (0/1), статус online, напряжение voltage (мВ), ток current (мА) и предел мощности power_max (мВт)",
+        false,
+        |ui| {
+            if ui
+                .add_enabled(vm_on, egui::Button::new("Модуль АКБ подключён (18 Вт PD)"))
+                .on_hover_text("Записать Det=1, online=1, voltage=12000, current=1500, power_max=18000 в /sys/devices/platform/ya_pd")
+                .clicked()
+            {
+                app.send_serial_command(
+                    "echo 1 > /sys/devices/platform/ya_pd/Det; \
+                     echo 1 > /sys/devices/platform/ya_pd/online; \
+                     echo 12000 > /sys/devices/platform/ya_pd/voltage; \
+                     echo 1500 > /sys/devices/platform/ya_pd/current; \
+                     echo 18000 > /sys/devices/platform/ya_pd/power_max",
+                );
+            }
+            if ui
+                .add_enabled(vm_on, egui::Button::new("Отключить модуль (Det=0)"))
+                .on_hover_text("Записать Det=0 в /sys/devices/platform/ya_pd/Det")
+                .clicked()
+            {
+                app.send_serial_command("echo 0 > /sys/devices/platform/ya_pd/Det");
+            }
+            if ui
+                .add_enabled(vm_on, egui::Button::new("Прочитать ya_pd + ACM8625S + AW933xx"))
+                .on_hover_text("Вывести атрибуты ya_pd, усилителя 2-002c, калибровки ALS 2-0034, тач-контроллера 3-0012 и pcba_ids в ttyAMA0")
+                .clicked()
+            {
+                app.config.active_terminal_tab = "serial".to_string();
+                app.config.dock_collapsed = false;
+                app.send_serial_command(
+                    "head -n 1 /sys/devices/platform/ya_pd/* /sys/bus/i2c/devices/2-002c/name /sys/bus/i2c/devices/2-002c/settings_file /sys/bus/i2c/devices/2-0034/current_coefs /sys/bus/i2c/devices/3-0012/aot_cali /sys/devices/platform/pcba_ids/pcba_ids_drv/pcba_ids",
+                );
+            }
+        },
+    );
+
+    let (trig, conflicts) = app
+        .latest_state
+        .as_ref()
+        .map(|s| (s.ring_trigger.clone(), s.led_trigger_conflict_count))
+        .unwrap_or_else(|| ("ledfb-ring (Quasar Native)".to_string(), 0));
+    gnome_action_row(
+        ui,
+        "Контурное кольцо 16 LED (/dev/fb0) + Центральный круговой логотип oknix 6 LED (/dev/fb1)",
+        &format!(
+            "Активный триггер: {} | Отклонено записей sysfs при [ledfb-ring] (Trigger Conflict): {}",
+            trig, conflicts
+        ),
+        true,
+        |ui| {
+            if ui.button("Алиса Про (#00FF80 + #6B0FFF)").clicked() {
+                let latest = app.latest_state.get_or_insert_with(|| protocol::BridgeStateSnapshot {
+                    board_slug: app.config.selected_board.clone(),
+                    board_name: protocol::board_display_label(&app.config.selected_board),
+                    ring_leds: protocol::default_board_ring_leds(&app.config.selected_board),
+                    ..Default::default()
+                });
+                latest.logo_pixels = vec![
+                    [0x00, 0xff, 0x80],
+                    [0x6b, 0x0f, 0xff],
+                    [0x00, 0xff, 0x80],
+                    [0x6b, 0x0f, 0xff],
+                    [0x00, 0xff, 0x80],
+                    [0x6b, 0x0f, 0xff],
+                ];
+                if vm_on {
+                    app.send_serial_command(
+                        "printf '\\x00\\xff\\x80\\x6b\\x0f\\xff\\x00\\xff\\x80\\x6b\\x0f\\xff\\x00\\xff\\x80\\x6b\\x0f\\xff' > /dev/fb1",
+                    );
+                }
+                app.selected_led_pattern = "speaking".to_string();
+                app.send_command(HostCommand::SetLedPattern {
+                    pattern: "speaking".to_string(),
+                });
+            }
+            if ui.button("Бирюзовый (#00E5FF)").clicked() {
+                app.selected_led_pattern = "rgb:#00E5FF".to_string();
+                app.send_command(HostCommand::SetLedPattern {
+                    pattern: "rgb:#00E5FF".to_string(),
+                });
+            }
+            if ui.button("Авто (ledfb-ring)").clicked() {
+                app.selected_led_pattern.clear();
+                app.send_command(HostCommand::SetLedPattern {
+                    pattern: String::new(),
+                });
+            }
+            if vm_on {
+                if ui
+                    .button("Ручной sysfs (trigger=[none])")
+                    .on_hover_text("Переключить триггер кольца в '[none]' для прямой записи в /sys/class/leds/pickle:*:ring*/brightness без конфликта")
+                    .clicked()
+                {
+                    app.send_serial_command(
+                        "for d in /sys/class/leds/pickle:*:ring*; do echo '[none]' > \"$d/trigger\"; done",
+                    );
+                }
+                if ui
+                    .button("Вернуть триггер ledfb-ring")
+                    .on_hover_text("Обнулить brightness в sysfs и вернуть управление кольцом штатному триггеру драйвера ledfb-ring")
+                    .clicked()
+                {
+                    app.send_serial_command(
+                        "for d in /sys/class/leds/pickle:*:ring*; do echo 0 > \"$d/brightness\"; echo '[ledfb-ring] none' > \"$d/trigger\"; done",
                     );
                 }
             }

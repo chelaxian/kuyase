@@ -99,7 +99,12 @@ pub fn load_ambilight_pattern(kind: &str, zones: usize) -> Vec<(Vec<[u8; 3]>, u3
         return Vec::new();
     }
     let candidates = [
+        format!("/system/vendor/quasar/ledpatterns/oknix/{}.led", kind),
+        format!("/system/vendor/quasar/ledpatterns/oknix/alice_{}.led", kind),
+        format!("/system/vendor/quasar/ledpatterns/oknix/alice_pro_{}.led", kind),
         format!("/system/vendor/quasar/ledpatterns/ambilight/{}.led", kind),
+        "/system/vendor/quasar/ledpatterns/oknix/alice_speaking.led".to_string(),
+        "/system/vendor/quasar/ledpatterns/oknix/boot.led".to_string(),
         "/system/vendor/quasar/ledpatterns/ambilight/violet.led".to_string(),
         "/system/vendor/quasar/ledpatterns/ambilight/boot.led".to_string(),
     ];

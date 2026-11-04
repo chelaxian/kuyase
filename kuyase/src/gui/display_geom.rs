@@ -5,7 +5,294 @@ pub use protocol::display::{
 };
 use protocol::BridgeStateSnapshot;
 use std::collections::BTreeMap;
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, TAU};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnclosureShape {
+    CirclePuck,       // yandexmini, yandexmini2, yandexmini2nc, bergamot, pickle, yandexmicro, plum, plumnc
+    SquircleCube,     // cucumber, orion, saturn
+    RectLightPanel,   // station2
+    CylinderPortable, // mango
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnclosureHitTarget {
+    DoaAzimuth(u32),
+    Button(&'static str), // "action", "mute", "volume_down", "volume_up"
+    MangoBluetooth,
+    MangoNextTrack,
+    MangoUsbCPd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CirclePuckSubtype {
+    /// pickle: 16 LED по внешнему ободу + центральный круговой 6-LED бублик oknix между кнопками `-` и `+`
+    OuterRingAndCenterOknix,
+    /// bergamot, yandexmini2, yandexmini2nc: 6 LED в центральном кольце вокруг Action между кнопками `-` и `+` (без внешнего обода)
+    CenterRingWithMinusPlus,
+    /// yandexmini: центральное окно лазера ToF (VL53L0X) внутри среднего кольца 6 LED (SN3236 BGR) + боковая кнопка Mute
+    Mini1TofAndSideMute,
+    /// yandexmicro, plum, plumnc: центральный треугольник из 3 LED + 4 сенсорные кнопки крестом (Action, Mute, `-`, `+`)
+    LiteTriangleAndCross4,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CircleEnclosureLayout {
+    pub center: Pos2,
+    pub outer_r: f32,
+    pub inner_cap_r: f32,
+    pub doa_r: f32,
+    pub ring_r: f32,
+    pub center_logo_r: f32,
+    pub button_hit_r: f32,
+    pub action_hit_r: f32,
+}
+
+pub fn board_enclosure_shape(slug: &str) -> EnclosureShape {
+    match protocol::normalize_board_slug(slug).as_str() {
+        "cucumber" | "orion" | "saturn" => EnclosureShape::SquircleCube,
+        "station2" => EnclosureShape::RectLightPanel,
+        "mango" => EnclosureShape::CylinderPortable,
+        _ => EnclosureShape::CirclePuck,
+    }
+}
+
+pub fn circle_puck_subtype(slug: &str) -> CirclePuckSubtype {
+    match protocol::normalize_board_slug(slug).as_str() {
+        "pickle" => CirclePuckSubtype::OuterRingAndCenterOknix,
+        "yandexmini" => CirclePuckSubtype::Mini1TofAndSideMute,
+        "yandexmicro" | "plum" | "plumnc" => CirclePuckSubtype::LiteTriangleAndCross4,
+        _ => CirclePuckSubtype::CenterRingWithMinusPlus,
+    }
+}
+
+pub fn circle_enclosure_layout(board_slug: &str, rect: Rect) -> CircleEnclosureLayout {
+    let center = rect.center();
+    let min_dim = rect.height().min(rect.width());
+    let outer_r = (min_dim * 0.36).clamp(64.0, 92.0);
+    let inner_cap_r = outer_r * 0.72;
+    let doa_r = outer_r + 14.0;
+    let ring_r = match circle_puck_subtype(board_slug) {
+        CirclePuckSubtype::OuterRingAndCenterOknix => outer_r * 0.85,
+        CirclePuckSubtype::CenterRingWithMinusPlus => (outer_r * 0.25).clamp(18.0, 24.0),
+        CirclePuckSubtype::Mini1TofAndSideMute => outer_r * 0.52,
+        CirclePuckSubtype::LiteTriangleAndCross4 => (outer_r * 0.20).clamp(14.0, 19.0),
+    };
+    let center_logo_r = (outer_r * 0.22).clamp(16.0, 22.0);
+    let button_hit_r = 14.0;
+    let action_hit_r = (outer_r * 0.28).clamp(20.0, 26.0);
+
+    CircleEnclosureLayout {
+        center,
+        outer_r,
+        inner_cap_r,
+        doa_r,
+        ring_r,
+        center_logo_r,
+        button_hit_r,
+        action_hit_r,
+    }
+}
+
+pub fn enclosure_button_targets(board_slug: &str, rect: Rect) -> Vec<(&'static str, Pos2, f32)> {
+    let norm = protocol::normalize_board_slug(board_slug);
+    let layout = circle_enclosure_layout(&norm, rect);
+    let c = layout.center;
+
+    match board_enclosure_shape(&norm) {
+        EnclosureShape::CirclePuck => match circle_puck_subtype(&norm) {
+            CirclePuckSubtype::OuterRingAndCenterOknix
+            | CirclePuckSubtype::CenterRingWithMinusPlus => {
+                let off_x = layout.outer_r * 0.52;
+                vec![
+                    ("action", c, layout.action_hit_r),
+                    ("volume_down", Pos2::new(c.x - off_x, c.y), layout.button_hit_r),
+                    ("volume_up", Pos2::new(c.x + off_x, c.y), layout.button_hit_r),
+                ]
+            }
+            CirclePuckSubtype::Mini1TofAndSideMute => {
+                let mute_r = layout.outer_r * 0.80;
+                let mute_pos = Pos2::new(
+                    c.x + mute_r * FRAC_PI_4.cos(),
+                    c.y + mute_r * FRAC_PI_4.sin(),
+                );
+                vec![("mute", mute_pos, layout.button_hit_r)]
+            }
+            CirclePuckSubtype::LiteTriangleAndCross4 => {
+                let cross_r = layout.outer_r * 0.66;
+                vec![
+                    ("action", Pos2::new(c.x, c.y - cross_r), layout.button_hit_r),
+                    ("mute", Pos2::new(c.x, c.y + cross_r), layout.button_hit_r),
+                    ("volume_down", Pos2::new(c.x - cross_r, c.y), layout.button_hit_r),
+                    ("volume_up", Pos2::new(c.x + cross_r, c.y), layout.button_hit_r),
+                ]
+            }
+        },
+        EnclosureShape::SquircleCube => {
+            if norm == "cucumber" {
+                let off_x = layout.outer_r * 0.52;
+                vec![
+                    ("action", c, layout.action_hit_r),
+                    ("volume_down", Pos2::new(c.x - off_x, c.y), layout.button_hit_r),
+                    ("volume_up", Pos2::new(c.x + off_x, c.y), layout.button_hit_r),
+                ]
+            } else {
+                vec![("action", c, layout.action_hit_r)]
+            }
+        }
+        EnclosureShape::RectLightPanel => {
+            let off_x = layout.outer_r * 0.48;
+            let top_y = c.y - layout.outer_r * 0.62;
+            vec![
+                ("action", Pos2::new(c.x, top_y), layout.button_hit_r),
+                ("volume_down", Pos2::new(c.x - off_x, top_y), layout.button_hit_r),
+                ("volume_up", Pos2::new(c.x + off_x, top_y), layout.button_hit_r),
+            ]
+        }
+        EnclosureShape::CylinderPortable => {
+            let body_center = Pos2::new(c.x, c.y - 6.0);
+            let ctrl_center = Pos2::new(body_center.x, body_center.y - 21.0);
+            let side_center = Pos2::new(body_center.x, body_center.y + 27.0);
+            vec![
+                ("action", ctrl_center, 16.0),
+                ("volume_down", Pos2::new(ctrl_center.x - 42.0, ctrl_center.y), 13.0),
+                ("volume_up", Pos2::new(ctrl_center.x + 42.0, ctrl_center.y), 13.0),
+                ("mute", Pos2::new(side_center.x - 72.0, side_center.y), 12.0),
+            ]
+        }
+    }
+}
+
+pub fn enclosure_button_pos(board_slug: &str, rect: Rect, button: &str) -> Option<Pos2> {
+    enclosure_button_targets(board_slug, rect)
+        .into_iter()
+        .find(|(name, _, _)| *name == button)
+        .map(|(_, pos, _)| pos)
+}
+
+pub fn hit_test_enclosure_target(
+    board_slug: &str,
+    rect: Rect,
+    pointer: Pos2,
+) -> Option<EnclosureHitTarget> {
+    if !rect.contains(pointer) {
+        return None;
+    }
+
+    for (btn, pos, hit_r) in enclosure_button_targets(board_slug, rect) {
+        if pointer.distance(pos) <= hit_r {
+            return Some(EnclosureHitTarget::Button(btn));
+        }
+    }
+
+    let layout = circle_enclosure_layout(board_slug, rect);
+    let dist = pointer.distance(layout.center);
+    if dist >= layout.outer_r * 0.88 && dist <= layout.doa_r + 14.0 {
+        return Some(EnclosureHitTarget::DoaAzimuth(doa_angle_from_pointer(
+            layout.center,
+            pointer,
+        )));
+    }
+
+    None
+}
+
+pub fn enclosure_inspector_text(
+    board_slug: &str,
+    st: &BridgeStateSnapshot,
+    hovered: Option<EnclosureHitTarget>,
+    press_mode: &str,
+) -> String {
+    let norm = protocol::normalize_board_slug(board_slug);
+    match hovered {
+        Some(EnclosureHitTarget::DoaAzimuth(angle)) => format!(
+            "Компас DOA (yio_audio :9850) | Азимут: {}° (текущий: {}°) | ЛКМ/Перетаскивание: повернуть источник звука",
+            angle, st.doa_angle
+        ),
+        Some(EnclosureHitTarget::Button("action")) => match norm.as_str() {
+            "pickle" | "cucumber" => format!(
+                "Центральная кнопка Action + круговой логотип oknix (/dev/fb1, 6 LED) | ЛКМ: uinput action ({})",
+                press_mode
+            ),
+            "mango" => format!(
+                "Центральная кнопка Action + круговой логотип oknix (AW21012 /dev/fb1, 3 LED) | ЛКМ: uinput action ({})",
+                press_mode
+            ),
+            "bergamot" | "yandexmini2" | "yandexmini2nc" => format!(
+                "Центральная кнопка Action + кольцо 6 LED (/dev/fb0 / sysfs) | ЛКМ: uinput action ({})",
+                press_mode
+            ),
+            _ => format!(
+                "Сенсорная кнопка Action (вызов Алисы / пауза) | ЛКМ: uinput action ({})",
+                press_mode
+            ),
+        },
+        Some(EnclosureHitTarget::Button("mute")) => {
+            let mute_state = if st.mics_muted {
+                "микрофоны ВЫКЛ"
+            } else {
+                "микрофоны ВКЛ"
+            };
+            if norm == "yandexmini" {
+                format!(
+                    "Физическая боковая кнопка Mute ({}) | ЛКМ: uinput mute ({})",
+                    mute_state, press_mode
+                )
+            } else {
+                format!(
+                    "Кнопка отключения микрофонов Mute ({}) | ЛКМ: uinput mute ({})",
+                    mute_state, press_mode
+                )
+            }
+        }
+        Some(EnclosureHitTarget::Button("volume_down")) => format!(
+            "Кнопка уменьшения громкости «−» (громкость {}/10) | ЛКМ: uinput volume_down ({})",
+            st.volume_level, press_mode
+        ),
+        Some(EnclosureHitTarget::Button("volume_up")) => format!(
+            "Кнопка увеличения громкости «+» (громкость {}/10) | ЛКМ: uinput volume_up ({})",
+            st.volume_level, press_mode
+        ),
+        Some(EnclosureHitTarget::Button(other)) => format!(
+            "Кнопка корпуса {} | ЛКМ: uinput {} ({})",
+            other, other, press_mode
+        ),
+        Some(EnclosureHitTarget::MangoBluetooth) => {
+            "Кнопка Bluetooth (mango) | ЛКМ: переключить паттерн bluetooth_playing (/dev/fb1)"
+                .to_string()
+        }
+        Some(EnclosureHitTarget::MangoNextTrack) => {
+            "Кнопка следующего трека «>|» (mango) | ЛКМ: остановить TTS / переключить трек (uinput)"
+                .to_string()
+        }
+        Some(EnclosureHitTarget::MangoUsbCPd) => {
+            "Разъём USB-C PD (IP2366 /sys/devices/virtual/ip2366_cls/ip2366_charger) | ЛКМ: переключить PD 12 В"
+                .to_string()
+        }
+        None => match norm.as_str() {
+            "pickle" => format!(
+                "DOA {}° | Кольцо 16 LED (/dev/fb0) + oknix 6 LED (/dev/fb1) | Кнопки [−] [Action] [+]: ЛКМ ({}) | Обод: DOA",
+                st.doa_angle, press_mode
+            ),
+            "bergamot" | "yandexmini2" | "yandexmini2nc" => format!(
+                "DOA {}° | Центральное кольцо 6 LED (/dev/fb0 / sysfs) | Кнопки [−] [Action] [+]: ЛКМ ({}) | Обод: DOA",
+                st.doa_angle, press_mode
+            ),
+            "yandexmini" => format!(
+                "DOA {}° | SN3236 (0x3c, 6 LED BGR) + ToF {} мм | Боковая кнопка [Mute]: ЛКМ ({}) | Обод: DOA",
+                st.doa_angle, st.tof_mm, press_mode
+            ),
+            "yandexmicro" | "plum" | "plumnc" => format!(
+                "DOA {}° | Кластер 3 LED (sysfs) | Кнопки [Action] [Mute] [−] [+]: ЛКМ ({}) | Обод: DOA",
+                st.doa_angle, press_mode
+            ),
+            _ => format!(
+                "DOA {}° | Громк {}/10 | Кольцо-компас: перетащите для DOA | Кнопки крышки: ЛКМ ({})",
+                st.doa_angle, st.volume_level, press_mode
+            ),
+        },
+    }
+}
 
 pub fn led_ring_position(center: Pos2, radius: f32, index: usize, count: usize) -> Pos2 {
     if count <= 1 {
@@ -151,6 +438,160 @@ mod tests {
         assert_eq!(doa_angle_from_pointer(c, right), 90);
         assert_eq!(doa_angle_from_pointer(c, Pos2::new(100.0, 150.0)), 180);
         assert_eq!(doa_angle_from_pointer(c, Pos2::new(50.0, 100.0)), 270);
+    }
+
+    #[test]
+    fn test_board_enclosure_shape_for_all_13_boards() {
+        assert_eq!(protocol::BOARD_CATALOG.len(), 13);
+        let mut circle_count = 0;
+        let mut squircle_count = 0;
+        let mut rect_count = 0;
+        let mut cylinder_count = 0;
+
+        for desc in protocol::BOARD_CATALOG {
+            match board_enclosure_shape(desc.slug) {
+                EnclosureShape::CirclePuck => {
+                    circle_count += 1;
+                    assert!(matches!(
+                        desc.slug,
+                        "yandexmini"
+                            | "yandexmini2"
+                            | "yandexmini2nc"
+                            | "bergamot"
+                            | "pickle"
+                            | "yandexmicro"
+                            | "plum"
+                            | "plumnc"
+                    ));
+                }
+                EnclosureShape::SquircleCube => {
+                    squircle_count += 1;
+                    assert!(matches!(desc.slug, "cucumber" | "orion" | "saturn"));
+                }
+                EnclosureShape::RectLightPanel => {
+                    rect_count += 1;
+                    assert_eq!(desc.slug, "station2");
+                }
+                EnclosureShape::CylinderPortable => {
+                    cylinder_count += 1;
+                    assert_eq!(desc.slug, "mango");
+                }
+            }
+        }
+
+        assert_eq!(circle_count, 8);
+        assert_eq!(squircle_count, 3);
+        assert_eq!(rect_count, 1);
+        assert_eq!(cylinder_count, 1);
+    }
+
+    #[test]
+    fn test_circle_puck_hit_testing_and_no_doa_conflict() {
+        let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(320.0, 232.0));
+
+        // 1. pickle, bergamot, yandexmini2, yandexmini2nc: center Action + left/right volume buttons
+        for slug in ["pickle", "bergamot", "yandexmini2", "yandexmini2nc"] {
+            let layout = circle_enclosure_layout(slug, rect);
+            assert_eq!(
+                hit_test_enclosure_target(slug, rect, layout.center),
+                Some(EnclosureHitTarget::Button("action")),
+                "center should hit action on {slug}"
+            );
+            let minus_pos = enclosure_button_pos(slug, rect, "volume_down").unwrap();
+            let plus_pos = enclosure_button_pos(slug, rect, "volume_up").unwrap();
+            assert_eq!(
+                hit_test_enclosure_target(slug, rect, minus_pos),
+                Some(EnclosureHitTarget::Button("volume_down"))
+            );
+            assert_eq!(
+                hit_test_enclosure_target(slug, rect, plus_pos),
+                Some(EnclosureHitTarget::Button("volume_up"))
+            );
+
+            // Outer DOA compass ring at 0, 90, 180, 270 degrees
+            let top_doa = Pos2::new(layout.center.x, layout.center.y - layout.doa_r);
+            let right_doa = Pos2::new(layout.center.x + layout.doa_r, layout.center.y);
+            assert_eq!(
+                hit_test_enclosure_target(slug, rect, top_doa),
+                Some(EnclosureHitTarget::DoaAzimuth(0))
+            );
+            assert_eq!(
+                hit_test_enclosure_target(slug, rect, right_doa),
+                Some(EnclosureHitTarget::DoaAzimuth(90))
+            );
+        }
+
+        // 2. yandexmini: central ToF window (not a button), side Mute button, NO volume buttons on cap
+        {
+            let slug = "yandexmini";
+            let layout = circle_enclosure_layout(slug, rect);
+            assert_eq!(hit_test_enclosure_target(slug, rect, layout.center), None);
+            assert!(enclosure_button_pos(slug, rect, "volume_down").is_none());
+            assert!(enclosure_button_pos(slug, rect, "volume_up").is_none());
+            let mute_pos = enclosure_button_pos(slug, rect, "mute").unwrap();
+            assert_eq!(
+                hit_test_enclosure_target(slug, rect, mute_pos),
+                Some(EnclosureHitTarget::Button("mute"))
+            );
+            let left_doa = Pos2::new(layout.center.x - layout.doa_r, layout.center.y);
+            assert_eq!(
+                hit_test_enclosure_target(slug, rect, left_doa),
+                Some(EnclosureHitTarget::DoaAzimuth(270))
+            );
+        }
+
+        // 3. yandexmicro, plum, plumnc: 4 cross buttons (action, mute, volume_down, volume_up) + outer DOA
+        for slug in ["yandexmicro", "plum", "plumnc"] {
+            let layout = circle_enclosure_layout(slug, rect);
+            for btn in ["action", "mute", "volume_down", "volume_up"] {
+                let bpos = enclosure_button_pos(slug, rect, btn).unwrap();
+                assert_eq!(
+                    hit_test_enclosure_target(slug, rect, bpos),
+                    Some(EnclosureHitTarget::Button(btn)),
+                    "button {btn} should hit on {slug}"
+                );
+            }
+            let bottom_doa = Pos2::new(layout.center.x, layout.center.y + layout.doa_r);
+            assert_eq!(
+                hit_test_enclosure_target(slug, rect, bottom_doa),
+                Some(EnclosureHitTarget::DoaAzimuth(180))
+            );
+        }
+    }
+
+    #[test]
+    fn test_enclosure_inspector_text_resting_and_hovered() {
+        let mut st = BridgeStateSnapshot::default();
+        st.doa_angle = 135;
+        st.volume_level = 6;
+        st.tof_mm = 320;
+
+        for slug in ["pickle", "bergamot", "yandexmini2", "yandexmini", "yandexmicro", "plum"] {
+            let rest = enclosure_inspector_text(slug, &st, None, "single");
+            assert!(!rest.is_empty());
+            assert!(rest.contains("135°"));
+            if slug == "yandexmini" {
+                assert!(rest.contains("SN3236") && rest.contains("ToF"));
+            } else {
+                assert!(!rest.contains("ToF"));
+            }
+
+            let hov_btn = enclosure_inspector_text(
+                slug,
+                &st,
+                Some(EnclosureHitTarget::Button("action")),
+                "double",
+            );
+            assert!(hov_btn.contains("uinput action (double)"));
+
+            let hov_doa = enclosure_inspector_text(
+                slug,
+                &st,
+                Some(EnclosureHitTarget::DoaAzimuth(240)),
+                "single",
+            );
+            assert!(hov_doa.contains("240°") && hov_doa.contains("DOA"));
+        }
     }
 
     #[test]

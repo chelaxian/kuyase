@@ -1,4 +1,4 @@
-use crate::gui::canvas::draw_ring_led;
+use crate::gui::canvas::draw_circular_oknix_logo;
 use crate::gui::display_geom::{
     build_local_segments_from_text, clock_segment_lines, hit_test_clock_segment,
     hit_test_matrix_pixel, render_text_to_matrix_21x12, segment_brightness,
@@ -279,23 +279,20 @@ pub fn render_aux_logo_strip(
             6
         };
         let hover_desc = if board_slug == "mango" {
-            "3-LED RGBW панель логотипа «oknix» на корпусе Яндекс Станции Стрит (mango):\n\
+            "Круговой 3-LED RGBW логотип Алисы «oknix» между кнопками «-» и «+» на Станции Стрит (mango):\n\
              • Аппаратный драйвер: Awinic AW21012 (leds-aw2101x.ko) + фреймбуфер quasar_led_ring.ko\n\
              • Запись через фреймбуфер /dev/fb1 (name=\"logo\" / \"oknix\"): 9 байт RGB24 (3×3) или 12 байт RGBW32 (3×4)\n\
              • Поканальное управление через sysfs: /sys/class/leds/mango:{red,green,blue}:logo{0..2}/brightness (0..255)\n\
              • Штатные анимации Алисы: /system/vendor/quasar/ledpatterns/oknix/*.led"
         } else {
-            "Дополнительная адресная RGB-подсветка логотипа Алисы на фронтальной панели:\n\
-             • Запись кадра через фреймбуфер /dev/fb1 (name=\"logo\"): 3 байта RGB на каждый светодиод\n\
-             • Поканальное управление через sysfs: /sys/class/leds/<prefix>:{red,green,blue}:logo{0..N}/brightness (0..255)"
+            "Центральный круговой 6-LED RGB-логотип Алисы («oknix») на верхней крышке:\n\
+             • Запись кадра через фреймбуфер /dev/fb1 (name=\"logo\"): 18 байт RGB24 (6×3)\n\
+             • Поканальное управление через sysfs: /sys/class/leds/<prefix>:{red,green,blue}:logo{0..5}/brightness (0..255)\n\
+             • Штатные анимации Алисы: /system/vendor/quasar/ledpatterns/oknix/*.led"
         };
 
         ui.horizontal_wrapped(|ui| {
-            let lbl_text = if board_slug == "mango" {
-                format!("Логотип oknix (/dev/fb1, {} LED): (?)", count)
-            } else {
-                format!("Логотип (/dev/fb1, {} LED): (?)", count)
-            };
+            let lbl_text = format!("Круговой логотип oknix (/dev/fb1, {} LED): (?)", count);
             ui.label(
                 RichText::new(lbl_text)
                     .small()
@@ -304,47 +301,76 @@ pub fn render_aux_logo_strip(
             )
             .on_hover_text(hover_desc);
 
-            let (lrect, lresp) =
-                ui.allocate_exact_size(Vec2::new((count as f32) * 20.0 + 16.0, 20.0), Sense::hover());
-            lresp.on_hover_text(hover_desc);
+            let (lrect, _lresp) = ui.allocate_exact_size(Vec2::new(36.0, 34.0), Sense::hover());
             let lp = ui.painter_at(lrect);
-            for i in 0..count {
-                let rgb = st
-                    .logo_pixels
-                    .get(i)
-                    .copied()
-                    .unwrap_or([0, 185, 235]);
-                let x = lrect.left() + 10.0 + (i as f32) * 20.0;
-                draw_ring_led(&lp, Pos2::new(x, lrect.center().y), 4.6, rgb);
-            }
+            draw_circular_oknix_logo(
+                &lp,
+                lrect.center(),
+                9.5,
+                3.4,
+                &st.logo_pixels,
+                count,
+                [135, 35, 255],
+            );
 
-            if app.session.is_some() {
-                if ui
-                    .small_button("Фиолетовый")
-                    .on_hover_text("Записать фиолетовый цвет Алисы (#6B0FFF) в /dev/fb1")
-                    .clicked()
-                {
-                    app.send_serial_command(
-                        "printf '\\x6b\\x0f\\xff\\x6b\\x0f\\xff\\x6b\\x0f\\xff\\x6b\\x0f\\xff\\x6b\\x0f\\xff\\x6b\\x0f\\xff' > /dev/fb1",
-                    );
+            if ui
+                .small_button("Фиолетовый")
+                .on_hover_text("Записать фиолетовый цвет Алисы (#6B0FFF) в круговой логотип /dev/fb1")
+                .clicked()
+            {
+                let latest = app.latest_state.get_or_insert_with(|| st.clone());
+                latest.logo_pixels = vec![[0x6b, 0x0f, 0xff]; count];
+                if app.session.is_some() {
+                    let hex_rep = "\\x6b\\x0f\\xff".repeat(count);
+                    app.send_serial_command(&format!("printf '{}' > /dev/fb1", hex_rep));
                 }
-                if ui
-                    .small_button("Бирюзовый")
-                    .on_hover_text("Записать бирюзовый цвет (#22CCFF) в /dev/fb1")
-                    .clicked()
-                {
-                    app.send_serial_command(
-                        "printf '\\x22\\xcc\\xff\\x22\\xcc\\xff\\x22\\xcc\\xff\\x22\\xcc\\xff\\x22\\xcc\\xff\\x22\\xcc\\xff' > /dev/fb1",
-                    );
+            }
+            if ui
+                .small_button("Бирюзовый")
+                .on_hover_text("Записать бирюзовый цвет (#22CCFF) в круговой логотип /dev/fb1")
+                .clicked()
+            {
+                let latest = app.latest_state.get_or_insert_with(|| st.clone());
+                latest.logo_pixels = vec![[0x22, 0xcc, 0xff]; count];
+                if app.session.is_some() {
+                    let hex_rep = "\\x22\\xcc\\xff".repeat(count);
+                    app.send_serial_command(&format!("printf '{}' > /dev/fb1", hex_rep));
                 }
-                if ui
-                    .small_button("Погасить")
-                    .on_hover_text("Очистить /dev/fb1 и сбросить яркость logo0..N в sysfs в 0")
-                    .clicked()
-                {
-                    app.send_serial_command(
-                        "for d in /sys/class/leds/*:logo*; do [ -d \"$d\" ] && echo 0 > \"$d/brightness\"; done; dd if=/dev/zero of=/dev/fb1 bs=18 count=1 2>/dev/null || true",
-                    );
+            }
+            if ui
+                .small_button("Алиса Про")
+                .on_hover_text("Записать градиент Алисы Про (#00FF80 + #6B0FFF) в круговой логотип /dev/fb1")
+                .clicked()
+            {
+                let mut grad = Vec::with_capacity(count);
+                let mut hex_rep = String::new();
+                for i in 0..count {
+                    if i % 2 == 0 {
+                        grad.push([0x00, 0xff, 0x80]);
+                        hex_rep.push_str("\\x00\\xff\\x80");
+                    } else {
+                        grad.push([0x6b, 0x0f, 0xff]);
+                        hex_rep.push_str("\\x6b\\x0f\\xff");
+                    }
+                }
+                let latest = app.latest_state.get_or_insert_with(|| st.clone());
+                latest.logo_pixels = grad;
+                if app.session.is_some() {
+                    app.send_serial_command(&format!("printf '{}' > /dev/fb1", hex_rep));
+                }
+            }
+            if ui
+                .small_button("Погасить")
+                .on_hover_text("Очистить /dev/fb1 и сбросить яркость logo0..N в sysfs в 0")
+                .clicked()
+            {
+                let latest = app.latest_state.get_or_insert_with(|| st.clone());
+                latest.logo_pixels = vec![[0, 0, 0]; count];
+                if app.session.is_some() {
+                    app.send_serial_command(&format!(
+                        "for d in /sys/class/leds/*:logo*; do [ -d \"$d\" ] && echo 0 > \"$d/brightness\"; done; dd if=/dev/zero of=/dev/fb1 bs={} count=1 2>/dev/null || true",
+                        count * 3
+                    ));
                 }
             }
         });
