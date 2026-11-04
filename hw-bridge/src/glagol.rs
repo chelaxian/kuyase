@@ -822,6 +822,7 @@ pub fn handle_glagol_external_client(mut stream: TcpStream, state: Arc<BridgeSta
                 .unwrap_or_else(|_| "{}".to_string());
             let init_frame = encode_ws_frame(0x1, initial_state.as_bytes());
             if stream.write_all(&init_frame).is_err() {
+                upsert_glagol_peer(&state, &ws_peer_id, &peer_addr, "websocket", None, false);
                 return;
             }
             let _ = stream.flush();
@@ -865,6 +866,7 @@ pub fn handle_glagol_external_client(mut stream: TcpStream, state: Arc<BridgeSta
                     _ => {}
                 }
             }
+            upsert_glagol_peer(&state, &ws_peer_id, &peer_addr, "websocket", None, false);
             return;
         }
     }
