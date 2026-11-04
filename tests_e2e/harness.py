@@ -212,8 +212,13 @@ def discover_test_boards() -> List[str]:
     return boards
 
 
-def run_headless_exec(board: str, script: str, port_offset: int = 200) -> str:
-    """Run a guest shell script via `kuyase run --headless --board <board> --snapshot --exec`."""
+def run_headless_exec(
+    board: str,
+    script: str,
+    port_offset: int = 200,
+    mode: str = "stub",
+) -> str:
+    """Run a guest shell script via `kuyase run --headless --board <board> --mode <mode> --snapshot --exec`."""
     kuyase_bin = find_kuyase_binary()
     proxy_port = _HttpsCacheGateway.port_number()
     rendered = script.replace("\r\n", "\n").replace(
@@ -239,6 +244,8 @@ def run_headless_exec(board: str, script: str, port_offset: int = 200) -> str:
             "--headless",
             "--board",
             board,
+            "--mode",
+            mode,
             "--snapshot",
             "--port-offset",
             str(port_offset),

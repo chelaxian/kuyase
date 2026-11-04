@@ -96,11 +96,35 @@ def build_quasar_q_exec_script(board: str) -> str:
         "GLAGOL_PLAY=$(command wget -qO- --header='Content-Type: application/json' --post-data='{\"command\":\"play\"}' http://127.0.0.1:1961/command)\n"
         'printf "%s\\n" "$GLAGOL_PLAY"\n'
         'printf "%s\\n" "$GLAGOL_PLAY" | grep -Fq \'"playing":true\'\n'
+        "GLAGOL_VOL=$(command wget -qO- --header='Content-Type: application/json' --post-data='{\"command\":\"setVolume\",\"volume\":0.7}' http://127.0.0.1:1961/command)\n"
+        'printf "%s\\n" "$GLAGOL_VOL"\n'
+        'printf "%s\\n" "$GLAGOL_VOL" | grep -Fq \'"volumeLevel":7\'\n'
+        'test "$(cat /data/quasar/last_vendor_volume)" = "14"\n'
+        "GLAGOL_TXT=$(command wget -qO- --header='Content-Type: application/json' --post-data='{\"command\":\"sendText\",\"text\":\"громкость 3\"}' http://127.0.0.1:1961/command)\n"
+        'printf "%s\\n" "$GLAGOL_TXT"\n'
+        "sleep 2\n"
+        "grep -Fq \"recognizedPhrase='громкость 3'\" /data/quasar/daemons_logs/maind.log\n"
+        "command wget -qO- http://127.0.0.1:1961/state | grep -Fq '\"volumeLevel\":3'\n"
         f"{glagol_check_peer}"
         'echo "=== 10. Unified maind.log verification ==="\n'
         "grep -Fq \"recognizedPhrase='привет'\" /data/quasar/daemons_logs/maind.log\n"
         "grep -Fq \"recognizedPhrase='привет'\" /tmp/daemons_logs/maind.log\n"
         'echo "__QUASAR_Q_E2E_OK=1"\n'
+    )
+
+
+def build_full_mode_dbus_exec_script() -> str:
+    return (
+        "set -eu\n"
+        "test -L /var/run\n"
+        "test -S /run/dbus/system_bus_socket\n"
+        "sleep 4\n"
+        "pidof maind >/dev/null\n"
+        "if grep -Eiq 'sdbus::Error|PermissionsInvalid|Failed to open bus|Message recipient disconnected' /tmp/daemons_logs/maind.log 2>/dev/null; then\n"
+        "  cat /tmp/daemons_logs/maind.log >&2\n"
+        "  exit 1\n"
+        "fi\n"
+        'echo "__FULL_MODE_DBUS_E2E_OK=1"\n'
     )
 
 
@@ -116,6 +140,19 @@ class TestQuasarVendorQE2E(unittest.TestCase):
                 out = run_headless_exec(board, script, port_offset=260 + idx * 10)
                 self.assertIn("Device ID: EMU0001", out)
                 self.assertIn("__QUASAR_Q_E2E_OK=1", out)
+
+    def test_full_mode_dbus_and_maind_across_boards(self) -> None:
+        boards = discover_test_boards()
+        if not boards:
+            self.skipTest("No `work/*-system.ext4` guest images found")
+
+        script = build_full_mode_dbus_exec_script()
+        for idx, board in enumerate(boards):
+            with self.subTest(board=board):
+                out = run_headless_exec(
+                    board, script, port_offset=380 + idx * 10, mode="full"
+                )
+                self.assertIn("__FULL_MODE_DBUS_E2E_OK=1", out)
 
 
 if __name__ == "__main__":
