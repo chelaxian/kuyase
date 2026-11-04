@@ -631,6 +631,77 @@ fn verify_mango_peripherals(board: &str, adb: &AdbClient) -> Result<(), String> 
     Ok(())
 }
 
+fn verify_station2_peripherals(
+    board: &str,
+    bridge: &BridgeClient,
+    adb: &AdbClient,
+) -> Result<(), String> {
+    let st2_out = adb.shell(
+        "cat /sys/class/power_supply/ya_pd/device/name; \
+         cat /sys/class/power_supply/ya_pd/health; \
+         cat /sys/class/power_supply/ya_pd/voltage_now; \
+         cat /sys/class/power_supply/ya_pd/current_now; \
+         cat /sys/bus/i2c/drivers/sy6045s/1-002a/settings_file; \
+         cat /sys/bus/i2c/drivers/tas5825m/1-002a/settings_file; \
+         cat /tmp/amp_settings_file",
+        Duration::from_secs(8),
+    )?;
+    let lines: Vec<&str> = st2_out
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.first().copied() != Some("husb238_pd")
+        || lines.get(1).copied() != Some("Good")
+        || lines.get(2).copied() != Some("15000")
+        || lines.get(3).copied() != Some("2000")
+        || lines.get(4).copied() != Some("sy6045s-settings.txt")
+        || lines.get(5).copied() != Some("sy6045s-settings.txt")
+        || lines.get(6).copied() != Some("sy6045s-settings.txt")
+    {
+        return Err(format!(
+            "[{}] Unexpected station2 HUSB238 PD / SY6045S / TAS5825M sysfs state: {:?}",
+            board, lines
+        ));
+    }
+
+    let mut tokens = vec!["000000"; 88];
+    tokens[0] = "6b0fff";
+    tokens[1] = "00e5ff";
+    tokens[87] = "ff9933";
+    let frame_pat = format!("frame:{}", tokens.join(" "));
+    let ack_frame = bridge.send_command(&HostCommand::SetLedPattern { pattern: frame_pat })?;
+    if !ack_frame.ok {
+        return Err(format!(
+            "[{}] SetLedPattern(frame:...) failed: {:?}",
+            board, ack_frame.error
+        ));
+    }
+    let st_frame = bridge.request_state()?;
+    if st_frame.ring_pixels.len() != 88
+        || st_frame.ring_pixels.first().copied() != Some([107, 15, 255])
+        || st_frame.ring_pixels.get(1).copied() != Some([0, 229, 255])
+        || st_frame.ring_pixels.get(87).copied() != Some([255, 153, 51])
+    {
+        return Err(format!(
+            "[{}] Unexpected station2 88-LED frame: pixels [0]={:?}, [1]={:?}, [87]={:?}",
+            board,
+            st_frame.ring_pixels.first(),
+            st_frame.ring_pixels.get(1),
+            st_frame.ring_pixels.get(87)
+        ));
+    }
+    bridge.send_command(&HostCommand::SetLedPattern {
+        pattern: String::new(),
+    })?;
+
+    println!(
+        "[{}] Station2 HUSB238 PD (15V/2A Good), SY6045S/TAS5825M (1-002a) & 88-LED frame: protocol verified!",
+        board
+    );
+    Ok(())
+}
+
 fn verify_orion_peripherals(
     board: &str,
     bridge: &BridgeClient,
@@ -1244,6 +1315,9 @@ pub fn run_board_verification(
         }
         if board == "mango" {
             verify_mango_peripherals(board, &adb)?;
+        }
+        if board == "station2" {
+            verify_station2_peripherals(board, &bridge, &adb)?;
         }
         if board == "orion" {
             verify_orion_peripherals(board, &bridge, &adb)?;

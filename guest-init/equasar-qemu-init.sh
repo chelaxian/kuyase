@@ -747,6 +747,28 @@ elif [ "$BOARD" = "mango" ]; then
   echo 0 > /sys/devices/platform/charge-animation/stop
   echo 0 > /sys/devices/platform/logo-animation/stop
   echo '[{"name":"main","assembly":"1"},{"name":"third_mic_board","assembly":"1"}]' > /sys/devices/platform/pcba_ids/pcba_ids_drv/pcba_ids
+elif [ "$BOARD" = "station2" ]; then
+  mkdir -p /sys/class/power_supply/ya_pd/device \
+           /sys/bus/i2c/drivers/tas5825m/1-002a \
+           /sys/bus/i2c/drivers/sy6045s/1-002a \
+           /sys/bus/i2c/devices/1-002a \
+           /sys/devices/platform/pcba_ids/pcba_ids_drv
+  echo "husb238_pd" > /sys/class/power_supply/ya_pd/device/name
+  echo "Good" > /sys/class/power_supply/ya_pd/health
+  echo 15000 > /sys/class/power_supply/ya_pd/voltage_now
+  echo 2000 > /sys/class/power_supply/ya_pd/current_now
+  echo "sy6045s" > /sys/bus/i2c/drivers/sy6045s/1-002a/name
+  echo "sy6045s-settings.txt" > /sys/bus/i2c/drivers/sy6045s/1-002a/settings_file
+  echo "sy6045s-settings.txt" > /sys/bus/i2c/drivers/sy6045s/1-002a/default_settings
+  echo "tas5825m" > /sys/bus/i2c/drivers/tas5825m/1-002a/name
+  echo "sy6045s-settings.txt" > /sys/bus/i2c/drivers/tas5825m/1-002a/settings_file
+  echo "sy6045s-settings.txt" > /sys/bus/i2c/drivers/tas5825m/1-002a/default_settings
+  echo "sy6045s" > /sys/bus/i2c/devices/1-002a/name
+  echo "sy6045s-settings.txt" > /sys/bus/i2c/devices/1-002a/settings_file
+  echo "sy6045s-settings.txt" > /sys/bus/i2c/devices/1-002a/default_settings
+  ln -sfn /sys/bus/i2c/drivers/sy6045s/1-002a/settings_file /tmp/amp_settings_file
+  ln -sfn /sys/bus/i2c/drivers/sy6045s/1-002a/default_settings /tmp/amp_default_settings
+  echo '[{"name":"main","assembly":"1"},{"name":"top","assembly":"1"}]' > /sys/devices/platform/pcba_ids/pcba_ids_drv/pcba_ids
 fi
 
 # 8. Configure ALSA (/etc/asound.conf & /tmp/alsa/alsa.conf) for snd-aloop (card 0: Loopback)

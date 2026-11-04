@@ -1158,6 +1158,25 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                          • Усилитель TI ACM8625S (2-002c): профили mango-acm8625.cfg (в помещении) и mango-acm8625-outside.cfg (на улице)\n\
                                          Управлять параметрами в 1 клик можно справа в блоке «3. Специфичная периферия платы (mango)».",
                                     );
+                                } else if board_slug == "station2" {
+                                    ui.add(
+                                        egui::Button::new(
+                                            RichText::new("HUSB238 PD + SY6045S/TAS5825M (?)")
+                                                .small()
+                                                .monospace()
+                                                .color(Color32::from_rgb(135, 235, 165)),
+                                        )
+                                        .fill(Color32::from_rgb(24, 52, 36))
+                                        .rounding(99.0)
+                                        .sense(Sense::hover()),
+                                    )
+                                    .on_hover_text(
+                                        "Аппаратная периферия Яндекс Станции 2 (station2):\n\
+                                         • Верхняя световая панель 88 RGBW LED: SPI FPGA gowin_led_device (/dev/fb0 + /sys/class/leds/station2:*:ring0..87)\n\
+                                         • Контроллер питания USB-C PD HUSB238 (S30pd_controller): /sys/class/power_supply/ya_pd/{device/name,health,voltage_now,current_now}\n\
+                                         • Аудиоусилитель SY6045S / TAS5825M (S47ampl): /sys/bus/i2c/drivers/{sy6045s,tas5825m}/1-002a/settings_file (/tmp/amp_settings_file)\n\
+                                         Управлять параметрами в 1 клик можно справа в блоке «3. Специфичная периферия платы (station2)».",
+                                    );
                                 }
                             }
                         });

@@ -23,6 +23,8 @@ pub fn render_board_specific_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
                 render_mango_card_rows(ui, app);
             } else if board_slug == "pickle" {
                 render_pickle_card_rows(ui, app);
+            } else if board_slug == "station2" {
+                render_station2_card_rows(ui, app);
             } else {
                 render_generic_sysfs_ring_rows(ui, app);
             }
@@ -382,6 +384,119 @@ fn render_pickle_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
                 app.apply_preset_led_pattern("alice_pro_listening");
             }
             render_sysfs_ring_action_buttons(ui, app, vm_on);
+        },
+    );
+}
+
+fn render_station2_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
+    let vm_on = app.session.is_some();
+    let (trig, conflicts) = app
+        .latest_state
+        .as_ref()
+        .map(|s| (s.ring_trigger.clone(), s.led_trigger_conflict_count))
+        .unwrap_or_else(|| ("ledfb-ring (Quasar Native)".to_string(), 0));
+    gnome_action_row(
+        ui,
+        "Верхняя световая панель 88 RGBW LED (/dev/fb0, SPI FPGA gowin_led_device + station2:*:ring0..87)",
+        &format!(
+            "Активный триггер: {} | Отклонено записей sysfs при [ledfb-ring] (Trigger Conflict): {}",
+            trig, conflicts
+        ),
+        false,
+        |ui| {
+            for (lbl, pat) in [
+                ("Свеча", "panel/candle.led"),
+                ("Лава-лампа", "panel/lavalamp.led"),
+                ("Сияние", "panel/polar_lights.led"),
+            ] {
+                if ui
+                    .button(lbl)
+                    .on_hover_text(format!(
+                        "Запустить фоновую полноцветную анимацию Станции 2: /system/vendor/quasar/ledpatterns/{}",
+                        pat
+                    ))
+                    .clicked()
+                {
+                    app.apply_firmware_led_pattern(pat);
+                }
+            }
+            render_sysfs_ring_action_buttons(ui, app, vm_on);
+        },
+    );
+
+    gnome_action_row(
+        ui,
+        "Контроллер USB-C PD HUSB238 (/sys/class/power_supply/ya_pd/*) и усилитель TAS5825M / SY6045S (1-002a)",
+        "Профили питания PDO (S30pd_controller: 15 В / 2 А, 12 В, 9 В), конфигурация DSP усилителя (S47ampl: /tmp/amp_settings_file) и pcba_ids",
+        true,
+        |ui| {
+            for (lbl, v_mv, c_ma, health) in [
+                ("PD 15 В / 2 А (30 Вт)", 15000, 2000, "Good"),
+                ("PD 12 В / 1.5 А", 12000, 1500, "Good"),
+                ("PD 9 В (Слабый БП)", 9000, 1500, "Good"),
+            ] {
+                if ui
+                    .add_enabled(vm_on, egui::Button::new(lbl))
+                    .on_hover_text(format!(
+                        "Записать voltage_now={}, current_now={}, health={} в /sys/class/power_supply/ya_pd/*",
+                        v_mv, c_ma, health
+                    ))
+                    .clicked()
+                {
+                    app.send_serial_command(&format!(
+                        "echo {v} > /sys/class/power_supply/ya_pd/voltage_now; \
+                         echo {c} > /sys/class/power_supply/ya_pd/current_now; \
+                         echo {h} > /sys/class/power_supply/ya_pd/health",
+                        v = v_mv,
+                        c = c_ma,
+                        h = health
+                    ));
+                }
+            }
+            if ui
+                .add_enabled(vm_on, egui::Button::new("DSP: SY6045S"))
+                .on_hover_text(
+                    "Записать профиль sy6045s-settings.txt в /tmp/amp_settings_file и /sys/bus/i2c/drivers/sy6045s/1-002a/settings_file",
+                )
+                .clicked()
+            {
+                app.send_serial_command(
+                    "echo sy6045s-settings.txt > /tmp/amp_settings_file; \
+                     echo sy6045s-settings.txt > /sys/bus/i2c/drivers/sy6045s/1-002a/settings_file; \
+                     echo sy6045s-settings.txt > /sys/bus/i2c/devices/1-002a/settings_file; \
+                     echo sy6045s > /sys/bus/i2c/devices/1-002a/name",
+                );
+            }
+            if ui
+                .add_enabled(vm_on, egui::Button::new("DSP: TAS5825M"))
+                .on_hover_text(
+                    "Записать профиль tas5825m.txt в /tmp/amp_settings_file и /sys/bus/i2c/drivers/tas5825m/1-002a/settings_file",
+                )
+                .clicked()
+            {
+                app.send_serial_command(
+                    "echo tas5825m.txt > /tmp/amp_settings_file; \
+                     echo tas5825m.txt > /sys/bus/i2c/drivers/tas5825m/1-002a/settings_file; \
+                     echo tas5825m.txt > /sys/bus/i2c/devices/1-002a/settings_file; \
+                     echo tas5825m > /sys/bus/i2c/devices/1-002a/name",
+                );
+            }
+            if ui
+                .add_enabled(
+                    vm_on,
+                    egui::Button::new("Прочитать HUSB238 + Усилитель + pcba_ids"),
+                )
+                .on_hover_text(
+                    "Вывести атрибуты /sys/class/power_supply/ya_pd/*, /tmp/amp_settings_file и JSON pcba_ids в консоль ttyAMA0",
+                )
+                .clicked()
+            {
+                app.config.active_terminal_tab = "serial".to_string();
+                app.config.dock_collapsed = false;
+                app.send_serial_command(
+                    "head -n 1 /sys/class/power_supply/ya_pd/device/name /sys/class/power_supply/ya_pd/health /sys/class/power_supply/ya_pd/voltage_now /sys/class/power_supply/ya_pd/current_now /tmp/amp_settings_file /tmp/amp_default_settings /sys/devices/platform/pcba_ids/pcba_ids_drv/pcba_ids",
+                );
+            }
         },
     );
 }
