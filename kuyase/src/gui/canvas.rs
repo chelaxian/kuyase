@@ -3,9 +3,9 @@ pub use crate::gui::display_geom::{
     build_local_segments_from_text, circle_enclosure_layout, circle_puck_subtype,
     clock_segment_lines, default_board_ring_leds, doa_angle_from_pointer, enclosure_button_pos,
     enclosure_button_targets, enclosure_inspector_text, hit_test_clock_segment,
-    hit_test_enclosure_target, hit_test_matrix_pixel, led_ring_position,
+    hit_test_enclosure_target, hit_test_matrix_pixel, led_ring_position, mango_enclosure_layout,
     render_text_to_matrix_21x12, segment_brightness, squircle_ring_position, CircleEnclosureLayout,
-    CirclePuckSubtype, EnclosureHitTarget, EnclosureShape,
+    CirclePuckSubtype, EnclosureHitTarget, EnclosureShape, MangoEnclosureLayout,
 };
 use crate::gui::faceplates::{
     render_aux_logo_strip, render_matrix_21x12_faceplate, render_segment_clock_faceplate,
@@ -788,6 +788,249 @@ fn render_rect_light_panel_enclosure(
     }
 }
 
+fn render_mango_street_enclosure(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    st: &BridgeStateSnapshot,
+    hovered_target: Option<EnclosureHitTarget>,
+) {
+    let m = mango_enclosure_layout(rect);
+
+    draw_doa_compass_ring(
+        painter,
+        m.body_center,
+        m.doa_r - 14.0,
+        m.doa_r,
+        st.doa_angle,
+        matches!(hovered_target, Some(EnclosureHitTarget::DoaAzimuth(_))),
+    );
+
+    // Петля ремешка-карабина справа на корпусе
+    painter.rect_stroke(
+        m.strap_rect,
+        7.0,
+        Stroke::new(3.0, Color32::from_rgb(58, 66, 80)),
+    );
+
+    // Цилиндрический портативный корпус Яндекс Станции Стрит (IP67)
+    painter.rect_filled(m.body_rect, 30.0, Color32::from_rgb(24, 28, 36));
+    painter.rect_stroke(
+        m.body_rect,
+        30.0,
+        Stroke::new(2.0, Color32::from_rgb(66, 74, 90)),
+    );
+
+    // Торцевые пассивные излучатели слева и справа
+    painter.line_segment(
+        [
+            Pos2::new(m.body_rect.left() + 18.0, m.body_rect.top() + 14.0),
+            Pos2::new(m.body_rect.left() + 18.0, m.body_rect.bottom() - 14.0),
+        ],
+        Stroke::new(1.4, Color32::from_rgb(48, 55, 68)),
+    );
+    painter.line_segment(
+        [
+            Pos2::new(m.body_rect.right() - 18.0, m.body_rect.top() + 14.0),
+            Pos2::new(m.body_rect.right() - 18.0, m.body_rect.bottom() - 14.0),
+        ],
+        Stroke::new(1.4, Color32::from_rgb(48, 55, 68)),
+    );
+
+    // 1. Верхняя прорезиненная панель управления: [ BT ] [ - ] ( oknix 3 LED ) [ + ] [ >| ]
+    painter.rect_filled(m.ctrl_rect, 22.0, Color32::from_rgb(15, 18, 24));
+    painter.rect_stroke(
+        m.ctrl_rect,
+        22.0,
+        Stroke::new(1.2, Color32::from_rgb(54, 62, 76)),
+    );
+
+    let bt_hovered = hovered_target == Some(EnclosureHitTarget::MangoBluetooth);
+    painter.circle_filled(
+        m.bt_pos,
+        10.5,
+        if bt_hovered {
+            Color32::from_rgb(32, 48, 72)
+        } else {
+            Color32::from_rgb(20, 24, 32)
+        },
+    );
+    painter.circle_stroke(
+        m.bt_pos,
+        10.5,
+        Stroke::new(
+            if bt_hovered { 1.6 } else { 1.0 },
+            if bt_hovered {
+                Color32::from_rgb(110, 195, 255)
+            } else {
+                Color32::from_rgb(56, 65, 82)
+            },
+        ),
+    );
+    painter.text(
+        m.bt_pos,
+        egui::Align2::CENTER_CENTER,
+        "BT",
+        egui::FontId::monospace(9.5),
+        if bt_hovered {
+            Color32::from_rgb(215, 238, 255)
+        } else {
+            Color32::from_rgb(138, 162, 194)
+        },
+    );
+
+    draw_cap_touch_button(
+        painter,
+        m.minus_pos,
+        "volume_down",
+        hovered_target == Some(EnclosureHitTarget::Button("volume_down")),
+        st.mics_muted,
+    );
+    draw_cap_touch_button(
+        painter,
+        m.plus_pos,
+        "volume_up",
+        hovered_target == Some(EnclosureHitTarget::Button("volume_up")),
+        st.mics_muted,
+    );
+
+    let next_hovered = hovered_target == Some(EnclosureHitTarget::MangoNextTrack);
+    painter.circle_filled(
+        m.next_pos,
+        10.5,
+        if next_hovered {
+            Color32::from_rgb(32, 46, 66)
+        } else {
+            Color32::from_rgb(20, 24, 32)
+        },
+    );
+    painter.circle_stroke(
+        m.next_pos,
+        10.5,
+        Stroke::new(
+            if next_hovered { 1.6 } else { 1.0 },
+            if next_hovered {
+                Color32::from_rgb(110, 195, 255)
+            } else {
+                Color32::from_rgb(56, 65, 82)
+            },
+        ),
+    );
+    painter.text(
+        m.next_pos,
+        egui::Align2::CENTER_CENTER,
+        ">|",
+        egui::FontId::monospace(9.5),
+        if next_hovered {
+            Color32::from_rgb(215, 238, 255)
+        } else {
+            Color32::from_rgb(148, 162, 184)
+        },
+    );
+
+    // Центральный круговой логотип Алисы «oknix» (/dev/fb1, 3 RGBW LED AW21012)
+    let logo_count = if !st.logo_pixels.is_empty() {
+        st.logo_pixels.len()
+    } else {
+        3
+    };
+    draw_circular_oknix_logo(
+        painter,
+        m.action_pos,
+        11.2,
+        4.2,
+        &st.logo_pixels,
+        logo_count,
+        [135, 45, 255],
+    );
+    if hovered_target == Some(EnclosureHitTarget::Button("action")) {
+        painter.circle_stroke(
+            m.action_pos,
+            18.5,
+            Stroke::new(1.5, Color32::from_rgb(110, 195, 255)),
+        );
+    }
+
+    // 2. Боковая прорезиненная планка: [ Mute ] [ Power ] [ • • • • 4 LED заряда /dev/fb0 ] [ USB-C ]
+    painter.rect_filled(m.side_rect, 16.0, Color32::from_rgb(15, 18, 24));
+    painter.rect_stroke(
+        m.side_rect,
+        16.0,
+        Stroke::new(1.2, Color32::from_rgb(50, 58, 72)),
+    );
+
+    draw_cap_touch_button(
+        painter,
+        m.mute_pos,
+        "mute",
+        hovered_target == Some(EnclosureHitTarget::Button("mute")),
+        st.mics_muted,
+    );
+
+    // Индикатор питания (Power)
+    painter.circle_filled(m.power_pos, 9.0, Color32::from_rgb(24, 29, 38));
+    painter.circle_stroke(
+        m.power_pos,
+        9.0,
+        Stroke::new(1.0, Color32::from_rgb(64, 72, 88)),
+    );
+    painter.text(
+        m.power_pos,
+        egui::Align2::CENTER_CENTER,
+        "P",
+        egui::FontId::monospace(9.5),
+        Color32::from_rgb(140, 152, 172),
+    );
+
+    // Линейная шкала из 4 светодиодов заряда АКБ (/dev/fb0, mango:*:ring1..4, AW9110)
+    for (idx, &pos) in m.batt_led_positions.iter().enumerate() {
+        let default_batt = if idx < 3 {
+            [215, 232, 255]
+        } else {
+            [0, 0, 0]
+        };
+        let rgb = st.ring_pixels.get(idx).copied().unwrap_or(default_batt);
+        draw_ring_led(painter, pos, 3.8, rgb);
+    }
+
+    // Разъём USB-C PD (IP2366) справа от 4 индикаторов заряда
+    let usbc_hovered = hovered_target == Some(EnclosureHitTarget::MangoUsbCPd);
+    painter.rect_filled(
+        m.usbc_rect,
+        4.5,
+        if usbc_hovered {
+            Color32::from_rgb(20, 34, 52)
+        } else {
+            Color32::from_rgb(8, 10, 14)
+        },
+    );
+    painter.rect_stroke(
+        m.usbc_rect,
+        4.5,
+        Stroke::new(
+            if usbc_hovered { 1.6 } else { 1.2 },
+            if usbc_hovered {
+                Color32::from_rgb(110, 195, 255)
+            } else {
+                Color32::from_rgb(82, 94, 114)
+            },
+        ),
+    );
+    painter.line_segment(
+        [
+            Pos2::new(m.usbc_rect.left() + 4.5, m.usbc_pos.y),
+            Pos2::new(m.usbc_rect.right() - 4.5, m.usbc_pos.y),
+        ],
+        Stroke::new(
+            1.6,
+            if usbc_hovered {
+                Color32::from_rgb(195, 230, 255)
+            } else {
+                Color32::from_rgb(120, 135, 158)
+            },
+        ),
+    );
+}
+
 fn stage_box_frame(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::none()
         .fill(Color32::from_rgb(23, 25, 30))
@@ -1104,9 +1347,77 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                             swipe_direction: None,
                                         });
                                     }
-                                    EnclosureHitTarget::MangoBluetooth
-                                    | EnclosureHitTarget::MangoNextTrack
-                                    | EnclosureHitTarget::MangoUsbCPd => {}
+                                    EnclosureHitTarget::MangoBluetooth => {
+                                        let enable_bt =
+                                            app.selected_led_pattern != "bluetooth_playing";
+                                        app.selected_led_pattern = if enable_bt {
+                                            "bluetooth_playing".to_string()
+                                        } else {
+                                            String::new()
+                                        };
+                                        let next_logo = if enable_bt {
+                                            vec![[0x20, 0x88, 0xff]; 3]
+                                        } else {
+                                            vec![[135, 45, 255]; 3]
+                                        };
+                                        st.logo_pixels = next_logo.clone();
+                                        let latest =
+                                            app.latest_state.get_or_insert_with(|| st.clone());
+                                        latest.logo_pixels = next_logo;
+                                        app.send_command(HostCommand::SetLedPattern {
+                                            pattern: app.selected_led_pattern.clone(),
+                                        });
+                                    }
+                                    EnclosureHitTarget::MangoNextTrack => {
+                                        app.send_command(HostCommand::IpcTest {
+                                            cmd: "stop_tts".to_string(),
+                                            text: None,
+                                        });
+                                        app.send_command(HostCommand::PressButton {
+                                            button: "action".to_string(),
+                                            action: "double".to_string(),
+                                        });
+                                    }
+                                    EnclosureHitTarget::MangoUsbCPd => {
+                                        let all_lit = st.ring_pixels.len() >= 4
+                                            && st
+                                                .ring_pixels
+                                                .iter()
+                                                .take(4)
+                                                .all(|px| px[0] > 0 || px[1] > 0 || px[2] > 0);
+                                        let next_ring = if all_lit {
+                                            vec![
+                                                [215, 232, 255],
+                                                [215, 232, 255],
+                                                [215, 232, 255],
+                                                [0, 0, 0],
+                                            ]
+                                        } else {
+                                            vec![[235, 245, 255]; 4]
+                                        };
+                                        st.ring_pixels = next_ring.clone();
+                                        let latest =
+                                            app.latest_state.get_or_insert_with(|| st.clone());
+                                        latest.ring_pixels = next_ring;
+                                        if app.session.is_some() {
+                                            if all_lit {
+                                                app.send_serial_command(
+                                                    "echo 0 > /sys/devices/virtual/ip2366_cls/ip2366_charger/charge_status; \
+                                                     echo 0 > /sys/devices/virtual/ip2366_cls/ip2366_charger/is_pd; \
+                                                     echo 5000 > /sys/devices/virtual/ip2366_cls/ip2366_charger/charge_voltage; \
+                                                     echo Discharging > /sys/class/power_supply/battery/status",
+                                                );
+                                            } else {
+                                                app.send_serial_command(
+                                                    "echo 1 > /sys/devices/virtual/ip2366_cls/ip2366_charger/charge_status; \
+                                                     echo 1 > /sys/devices/virtual/ip2366_cls/ip2366_charger/is_pd; \
+                                                     echo 12000 > /sys/devices/virtual/ip2366_cls/ip2366_charger/charge_voltage; \
+                                                     echo PD > /sys/devices/virtual/ip2366_cls/ip2366_charger/pd_protocol; \
+                                                     echo Charging > /sys/class/power_supply/battery/status",
+                                                );
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         } else if response.dragged() {
@@ -1155,11 +1466,9 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                     hovered_target,
                                 );
                             }
-                            _ => {
-                                // Базовый рендер некруглых плат (расширяется в тикетах 02 и 03)
-                                render_circle_puck_enclosure(
+                            EnclosureShape::CylinderPortable => {
+                                render_mango_street_enclosure(
                                     &painter,
-                                    &board_slug,
                                     rect,
                                     &st,
                                     hovered_target,
