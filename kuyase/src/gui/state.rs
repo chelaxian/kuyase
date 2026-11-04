@@ -24,6 +24,26 @@ use std::time::{Duration, Instant};
 
 pub const TOF_WAVE_DURATION_MS: u64 = 900;
 
+pub fn extract_led_patterns_from_ext4(image_path: &Path) -> Vec<protocol::LedPatternInfo> {
+    let Ok(tree) = crate::ext_fs::read_ext2_image(image_path) else {
+        return Vec::new();
+    };
+    let prefix = "system/vendor/quasar/ledpatterns/";
+    let mut out = Vec::new();
+    for path in tree.entries.keys() {
+        if let Some(rel_id) = path.strip_prefix(prefix) {
+            if let Some(bytes) = tree.get_file_bytes(path) {
+                let raw = String::from_utf8_lossy(bytes);
+                if let Some(info) = protocol::build_led_pattern_info(rel_id, &raw) {
+                    out.push(info);
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
@@ -105,6 +125,9 @@ pub struct GuiAppState {
     // Controls
     pub button_press_action: String,
     pub selected_led_pattern: String,
+    pub selected_firmware_led_pattern: String,
+    pub firmware_led_patterns: Vec<protocol::LedPatternInfo>,
+    pub firmware_led_patterns_board: String,
     pub clock_text_input: String,
     pub clock_brightness: u8,
     pub clock_active_mask: std::collections::BTreeMap<String, bool>,
@@ -187,6 +210,9 @@ impl GuiAppState {
             tof_restore_distance: 8190,
             button_press_action: "single".to_string(),
             selected_led_pattern: String::new(),
+            selected_firmware_led_pattern: String::new(),
+            firmware_led_patterns: Vec::new(),
+            firmware_led_patterns_board: String::new(),
             clock_text_input: "19:30".to_string(),
             clock_brightness: 255,
             clock_active_mask: protocol::display::build_segments_map_from_text("19:30", 255)
@@ -213,6 +239,7 @@ impl GuiAppState {
         };
         app.refresh_dependencies();
         app.refresh_images_and_dumps();
+        app.ensure_board_led_patterns_loaded();
         app.push_signal(
             SignalDirection::Rx,
             SignalCategory::Bridge,
@@ -302,6 +329,8 @@ impl GuiAppState {
         if dir.is_dir() {
             self.config.custom_images_dir = dir.display().to_string();
             self.refresh_images_and_dumps();
+            self.firmware_led_patterns_board.clear();
+            self.ensure_board_led_patterns_loaded();
             let _ = self.save_config();
             self.push_signal(
                 SignalDirection::Tx,
@@ -335,6 +364,8 @@ impl GuiAppState {
             }
             self.config.selected_board = slug.clone();
             self.refresh_images_and_dumps();
+            self.firmware_led_patterns_board.clear();
+            self.ensure_board_led_patterns_loaded();
             let _ = self.save_config();
             self.push_signal(
                 SignalDirection::Tx,
@@ -547,6 +578,34 @@ impl GuiAppState {
             .map(|(_, path, _)| path.clone())
     }
 
+    pub fn ensure_board_led_patterns_loaded(&mut self) {
+        if let Some(ref st) = self.latest_state {
+            if !st.available_led_patterns.is_empty() {
+                if self.firmware_led_patterns != st.available_led_patterns {
+                    self.firmware_led_patterns = st.available_led_patterns.clone();
+                    self.firmware_led_patterns_board = st.board_slug.clone();
+                }
+                return;
+            }
+        }
+        let board = self.config.selected_board.clone();
+        if self.firmware_led_patterns_board != board {
+            self.firmware_led_patterns_board = board;
+            self.firmware_led_patterns = self
+                .resolve_selected_image_path()
+                .map(|p| extract_led_patterns_from_ext4(&p))
+                .unwrap_or_default();
+            if !self.selected_firmware_led_pattern.is_empty()
+                && !self
+                    .firmware_led_patterns
+                    .iter()
+                    .any(|p| p.id == self.selected_firmware_led_pattern)
+            {
+                self.selected_firmware_led_pattern.clear();
+            }
+        }
+    }
+
     pub fn start_vm(&mut self) {
         self.stop_vm();
         self.refresh_dependencies();
@@ -755,6 +814,7 @@ impl GuiAppState {
                     self.temp_slider = snap.temp_c;
                     self.record_state_transition(None, &snap);
                     self.latest_state = Some(snap);
+                    self.ensure_board_led_patterns_loaded();
                     self.bridge = Some(Arc::new(client));
                     if let Some(ref sess) = self.session {
                         let _ = sess.send_serial_input("\n");
@@ -778,6 +838,7 @@ impl GuiAppState {
                 let prev_snap = self.latest_state.clone();
                 self.record_state_transition(prev_snap.as_ref(), &next_snap);
                 self.latest_state = Some(next_snap);
+                self.ensure_board_led_patterns_loaded();
             } else {
                 self.status_message = "Мост отключен.".to_string();
                 self.push_signal(
@@ -973,6 +1034,56 @@ mod tests {
         let led_signals = app.filtered_signals();
         assert_eq!(led_signals.len(), 1);
         assert!(led_signals[0].message.contains("led_trigger_conflict_count = 1"));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_extract_led_patterns_from_ext4_filters_and_classifies() {
+        let tmp =
+            std::env::temp_dir().join(format!("kuyase-ext4-ledpatterns-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let mut tree = crate::rootfs_tree::RootfsTree::default();
+        tree.insert_file(
+            "system/vendor/quasar/ledpatterns/ring/alice_listening.led",
+            b"loop\n6b0fff 370fff 6b0fff 370fff 6b0fff 370fff 30\n".to_vec(),
+            0o644,
+        );
+        tree.insert_file(
+            "system/vendor/quasar/ledpatterns/ring/alice_pro_listening.led",
+            b"loop\n00ff80 004020 00ff80 30\n".to_vec(),
+            0o644,
+        );
+        tree.insert_file(
+            "system/vendor/quasar/ledpatterns/clock/blink.binscled.zst",
+            b"binary-clock-data".to_vec(),
+            0o644,
+        );
+        tree.insert_file(
+            "system/vendor/quasar/ledpatterns/emi/test.led",
+            b"ffffff ffffff 50\n".to_vec(),
+            0o644,
+        );
+
+        let img_path = tmp.join("cucumber-system.ext4");
+        crate::ext_fs::write_ext2_image(&tree, &img_path, 4 * 1024 * 1024).unwrap();
+
+        let patterns = extract_led_patterns_from_ext4(&img_path);
+        assert_eq!(patterns.len(), 2);
+        assert_eq!(patterns[0].id, "ring/alice_listening.led");
+        assert_eq!(patterns[0].primary_rgb, [0x6B, 0x0F, 0xFF]);
+        assert_eq!(
+            patterns[0].label,
+            "ring/alice_listening.led (#6B0FFF Фиолетовый)"
+        );
+        assert_eq!(patterns[1].id, "ring/alice_pro_listening.led");
+        assert_eq!(patterns[1].primary_rgb, [0x00, 0xFF, 0x80]);
+        assert_eq!(
+            patterns[1].label,
+            "ring/alice_pro_listening.led (#00FF80 Изумрудный)"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }

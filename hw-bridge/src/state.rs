@@ -224,6 +224,7 @@ pub struct BridgeState {
     pub last_spoken_text: Mutex<String>,
     pub glagol_peers: Mutex<Vec<crate::glagol::GlagolPeerConnection>>,
     pub bridge_clients: Mutex<Vec<std::sync::mpsc::SyncSender<protocol::GuestPacket>>>,
+    pub available_led_patterns: Vec<protocol::LedPatternInfo>,
     pub peripherals: BoardPeripherals,
 }
 
@@ -244,6 +245,7 @@ impl BridgeState {
             crate::proto::quasar_root::QuasarWireFormat::LegacyDirect => 0,
             crate::proto::quasar_root::QuasarWireFormat::Envelope252 => 1,
         };
+        let available_led_patterns = crate::leds::discover_guest_led_patterns();
         Self {
             board_slug: profile.board_slug,
             board_name: profile.board_name,
@@ -283,6 +285,7 @@ impl BridgeState {
             last_spoken_text: Mutex::new(String::new()),
             glagol_peers: Mutex::new(Vec::new()),
             bridge_clients: Mutex::new(Vec::new()),
+            available_led_patterns,
             peripherals,
         }
     }
