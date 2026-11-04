@@ -1,12 +1,44 @@
 use crate::gui::canvas::draw_ring_led;
 use crate::gui::display_geom::{
-    build_local_segments_from_text, clock_segment_lines, hit_test_clock_segment,
-    hit_test_matrix_pixel, render_text_to_matrix_21x12, segment_brightness,
+    build_local_segments_from_text, clock_inspector_text, clock_segment_lines,
+    clock_special_positions, hit_test_clock_segment, hit_test_matrix_pixel, matrix_inspector_text,
+    render_text_to_matrix_21x12, segment_brightness,
 };
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use protocol::{BridgeStateSnapshot, HostCommand};
 use std::collections::BTreeMap;
+
+fn render_display_inspector_bar(ui: &mut egui::Ui, text: &str, is_active_hover: bool) {
+    egui::Frame::none()
+        .fill(Color32::from_rgb(16, 20, 27))
+        .stroke(Stroke::new(
+            1.0,
+            if is_active_hover {
+                Color32::from_rgb(65, 115, 165)
+            } else {
+                Color32::from_rgb(40, 47, 58)
+            },
+        ))
+        .rounding(4.0)
+        .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width().max(230.0));
+            ui.add(
+                egui::Label::new(
+                    RichText::new(text)
+                        .small()
+                        .monospace()
+                        .color(if is_active_hover {
+                            Color32::from_rgb(185, 225, 255)
+                        } else {
+                            Color32::from_rgb(135, 148, 168)
+                        }),
+                )
+                .truncate(),
+            );
+        });
+}
 
 fn draw_matrix_dot(painter: &egui::Painter, pos: Pos2, radius: f32, val: u8) {
     if val > 0 {
@@ -32,13 +64,20 @@ fn draw_matrix_dot(painter: &egui::Painter, pos: Pos2, radius: f32, val: u8) {
     }
 }
 
-fn draw_segment_clock(painter: &egui::Painter, rect: Rect, segments: &BTreeMap<String, u8>) {
+fn draw_segment_clock(
+    painter: &egui::Painter,
+    rect: Rect,
+    segments: &BTreeMap<String, u8>,
+    hovered_seg: Option<&str>,
+) {
     painter.rect_filled(rect, 6.0, Color32::from_rgb(13, 16, 21));
     painter.rect_stroke(rect, 6.0, Stroke::new(1.0, Color32::from_rgb(51, 59, 72)));
 
-    let seg_color = |br: u8| {
+    let seg_color = |br: u8, hovered: bool| {
         if br > 0 {
             Color32::from_rgba_unmultiplied(232, 246, 255, br.max(55))
+        } else if hovered {
+            Color32::from_rgb(95, 170, 230)
         } else {
             Color32::from_rgb(37, 43, 54)
         }
@@ -46,25 +85,43 @@ fn draw_segment_clock(painter: &egui::Painter, rect: Rect, segments: &BTreeMap<S
 
     for (name, p0, p1) in clock_segment_lines(rect) {
         let br = segment_brightness(segments, &name);
-        painter.line_segment([p0, p1], Stroke::new(3.6, seg_color(br)));
+        let is_hovered = hovered_seg == Some(name.as_str());
+        if is_hovered {
+            painter.line_segment(
+                [p0, p1],
+                Stroke::new(6.2, Color32::from_rgba_unmultiplied(80, 195, 255, 95)),
+            );
+        }
+        let is_aux_bar = matches!(
+            name.as_str(),
+            "p4" | "p5" | "p6" | "p7" | "q4" | "q5" | "q6" | "q7" | "h2" | "l1" | "l2"
+        );
+        let stroke_w = if is_aux_bar { 3.0 } else { 3.6 };
+        painter.line_segment([p0, p1], Stroke::new(stroke_w, seg_color(br, is_hovered)));
     }
 
-    let digit_h = 40.0;
-    let start_x = rect.center().x - 66.0;
-    let top_y = rect.center().y - digit_h * 0.5;
-    let colon_x = start_x + 2.0 * 34.0 - 1.0;
+    let (p3_pos, q3_pos, deg_pos) = clock_special_positions(rect);
 
     let p3 = segment_brightness(segments, "p3");
+    let p3_hov = hovered_seg == Some("p3");
+    if p3_hov {
+        painter.circle_stroke(p3_pos, 5.0, Stroke::new(1.4, Color32::from_rgb(95, 195, 255)));
+    }
+    painter.circle_filled(p3_pos, 2.8, seg_color(p3, p3_hov));
+
     let q3 = segment_brightness(segments, "q3");
-    painter.circle_filled(Pos2::new(colon_x, top_y + 13.0), 2.8, seg_color(p3));
-    painter.circle_filled(Pos2::new(colon_x, top_y + 27.0), 2.8, seg_color(q3));
+    let q3_hov = hovered_seg == Some("q3");
+    if q3_hov {
+        painter.circle_stroke(q3_pos, 5.0, Stroke::new(1.4, Color32::from_rgb(95, 195, 255)));
+    }
+    painter.circle_filled(q3_pos, 2.8, seg_color(q3, q3_hov));
 
     let deg_br = segment_brightness(segments, "deg");
-    painter.circle_stroke(
-        Pos2::new(start_x + 4.0 * 34.0 + 14.0, top_y + 6.0),
-        4.2,
-        Stroke::new(2.4, seg_color(deg_br)),
-    );
+    let deg_hov = hovered_seg == Some("deg");
+    if deg_hov {
+        painter.circle_stroke(deg_pos, 6.2, Stroke::new(1.4, Color32::from_rgb(95, 195, 255)));
+    }
+    painter.circle_stroke(deg_pos, 4.2, Stroke::new(2.4, seg_color(deg_br, deg_hov)));
 }
 
 pub fn render_segment_clock_faceplate(
@@ -76,9 +133,17 @@ pub fn render_segment_clock_faceplate(
 ) {
     ui.horizontal_wrapped(|ui| {
         ui.label(
-            RichText::new("7-сегментный дисплей (45 сегментов)")
+            RichText::new("7-сегментный дисплей (45 сегментов) (?)")
                 .small()
                 .color(Color32::from_rgb(165, 175, 190)),
+        )
+        .on_hover_text(
+            "45-сегментный индикатор часов и символов (/sys/class/leds/<prefix>:white:clock-*):\n\
+             • Разряды 1..4 (28 сегментов): a1..g1, a2..g2, a3..g3, a4..g4\n\
+             • Надстрочные и подстрочные маркеры разрядов (8 сегментов): p4..p7 (верх), q4..q7 (низ)\n\
+             • Центральное двоеточие (2 сегмента): p3 (верхняя точка), q3 (нижняя точка)\n\
+             • Левый знаковый блок (6 сегментов): h1 (clockH0), h2 (clockH1), m1 (clockMINUS), m2, l1 (clockH2), l2 (clockH3)\n\
+             • Символ градуса (1 сегмент): deg (clockDEGREE)",
         );
         ui.separator();
         ui.label(
@@ -116,11 +181,23 @@ pub fn render_segment_clock_faceplate(
     }
 
     let (crect, cresp) = ui.allocate_exact_size(
-        Vec2::new(ui.available_width().max(240.0), 64.0),
+        Vec2::new(ui.available_width().max(240.0), 76.0),
         Sense::click_and_drag(),
     );
+    let hover_pos = cresp
+        .hover_pos()
+        .or_else(|| cresp.interact_pointer_pos());
+    let hovered_seg = if cresp.hovered() || cresp.dragged() {
+        hover_pos.and_then(|ptr| hit_test_clock_segment(crect, ptr))
+    } else {
+        None
+    };
+    if hovered_seg.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
     let cp = ui.painter_at(crect);
-    draw_segment_clock(&cp, crect, &active_segs);
+    draw_segment_clock(&cp, crect, &active_segs, hovered_seg.as_deref());
 
     let lmb_down = ui.input(|i| i.pointer.primary_down());
     let rmb_down = ui.input(|i| i.pointer.secondary_down());
@@ -148,6 +225,7 @@ pub fn render_segment_clock_faceplate(
                         app.clock_active_mask.remove(&seg_key);
                         0
                     };
+                    active_segs.insert(seg_key.clone(), next_val);
                     if let Some(ref mut latest) = app.latest_state {
                         latest.clock_segments.insert(seg_key.clone(), next_val);
                     }
@@ -166,6 +244,14 @@ pub fn render_segment_clock_faceplate(
             }
         }
     }
+
+    let inspector_line = clock_inspector_text(
+        board_slug,
+        hovered_seg.as_deref(),
+        &active_segs,
+        app.clock_brightness,
+    );
+    render_display_inspector_bar(ui, &inspector_line, hovered_seg.is_some());
 
     ui.horizontal_wrapped(|ui| {
         let resp = ui.add(
@@ -359,9 +445,15 @@ pub fn render_matrix_21x12_faceplate(
 ) {
     ui.horizontal_wrapped(|ui| {
         ui.label(
-            RichText::new("Матрица 21x12 LED (/dev/fb1)")
+            RichText::new("Матрица 21x12 LED (/dev/fb1) (?)")
                 .small()
                 .color(Color32::from_rgb(165, 175, 190)),
+        )
+        .on_hover_text(
+            "Монохромная светодиодная матрица 21×12 (252 LED) Яндекс Станции 3 (orion):\n\
+             • Аппаратный драйвер: FPGA Gowin (gowin_led_device) + фреймбуфер /dev/fb1 (name=\"YNDX LED screen\")\n\
+             • Формат кадра: 21×12 пикселей, 24 bpp RGB (756 байт), яркость каждого пикселя 0..255\n\
+             • Штатные анимации экрана: /system/vendor/quasar/ledpatterns/screen/*.led",
         );
         ui.separator();
         ui.label(
@@ -395,16 +487,35 @@ pub fn render_matrix_21x12_faceplate(
     let cell = 13.0;
     let msize = Vec2::new(21.0 * cell + 10.0, 12.0 * cell + 10.0);
     let (mrect, mresp) = ui.allocate_exact_size(msize, Sense::click_and_drag());
+    let hover_pos = mresp
+        .hover_pos()
+        .or_else(|| mresp.interact_pointer_pos());
+    let hovered_idx = if mresp.hovered() || mresp.dragged() {
+        hover_pos.and_then(|p| hit_test_matrix_pixel(mrect, cell, p))
+    } else {
+        None
+    };
+    if hovered_idx.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
     let mp = ui.painter_at(mrect);
     mp.rect_filled(mrect, 6.0, Color32::from_rgb(13, 15, 20));
     mp.rect_stroke(mrect, 6.0, Stroke::new(1.0, Color32::from_rgb(48, 56, 70)));
 
     let lmb_down = ui.input(|i| i.pointer.primary_down());
     let rmb_down = ui.input(|i| i.pointer.secondary_down());
-    if (lmb_down || rmb_down) && (mresp.hovered() || mresp.dragged() || mresp.clicked()) {
-        if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
+    let lmb_clicked = mresp.clicked();
+    let rmb_clicked = mresp.secondary_clicked();
+    if (lmb_down || rmb_down || lmb_clicked || rmb_clicked)
+        && (mresp.hovered() || mresp.dragged() || lmb_clicked || rmb_clicked)
+    {
+        if let Some(p) = ui
+            .input(|i| i.pointer.interact_pos())
+            .or_else(|| mresp.interact_pointer_pos())
+        {
             if let Some(idx) = hit_test_matrix_pixel(mrect, cell, p) {
-                let draw_mode = lmb_down && !rmb_down;
+                let draw_mode = (lmb_down || lmb_clicked) && !(rmb_down || rmb_clicked);
                 if draw_mode && app.clock_brightness == 0 {
                     app.clock_brightness = 255;
                 }
@@ -450,9 +561,19 @@ pub fn render_matrix_21x12_faceplate(
                 mrect.left() + 5.0 + (col as f32 + 0.5) * cell,
                 mrect.top() + 5.0 + (row as f32 + 0.5) * cell,
             );
+            if hovered_idx == Some(idx) {
+                mp.circle_stroke(dot_pos, 5.6, Stroke::new(1.3, Color32::from_rgb(95, 195, 255)));
+            }
             draw_matrix_dot(&mp, dot_pos, 4.2, v);
         }
     }
+
+    let inspector_line = matrix_inspector_text(
+        hovered_idx,
+        &app.matrix_custom_pixels,
+        app.clock_brightness,
+    );
+    render_display_inspector_bar(ui, &inspector_line, hovered_idx.is_some());
 
     ui.horizontal_wrapped(|ui| {
         let resp = ui.add(
