@@ -30,7 +30,7 @@ const SERIAL_SNIPPETS: &[(&str, &str)] = &[
         "for d in /sys/class/leds/*:red:ring*; do echo ledfb-ring > \"$d/trigger\"; echo 200 > \"$d/brightness\"; break; done",
     ),
     (
-        "Часы: Перебор всех 45 сегментов (cucumber / mini2 / bergamot / plum)",
+        "Часы: Перебор всех 45 сегментов (cucumber / pickle / mini2 / bergamot / plum)",
         "for d in /sys/class/leds/*:white:clock-*; do echo 0 > \"$d/brightness\"; done; for d in /sys/class/leds/*:white:clock-*; do echo 255 > \"$d/brightness\"; usleep 35000; done",
     ),
     (
@@ -50,7 +50,7 @@ const SERIAL_SNIPPETS: &[(&str, &str)] = &[
         "head -n 1 /sys/bus/i2c/devices/2-002c/name /sys/bus/i2c/devices/2-002c/settings_file /tmp/amp_settings_file /sys/devices/platform/pcba_ids/pcba_ids_drv/pcba_ids",
     ),
     (
-        "Mango / Cucumber: Логотип (/dev/fb1) — тест цветов Алисы",
+        "Mango / Cucumber / Pickle: Логотип (/dev/fb1) — тест цветов Алисы",
         "printf '\\x00\\xff\\x80\\x6b\\x0f\\xff\\x22\\xcc\\xff\\x00\\xff\\x80\\x6b\\x0f\\xff\\x22\\xcc\\xff' > /dev/fb1",
     ),
     (

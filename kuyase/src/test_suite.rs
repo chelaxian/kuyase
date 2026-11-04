@@ -451,7 +451,7 @@ fn verify_segment_clock_and_aux_logo(
                 board, st_clk2.clock_segments
             ));
         }
-        if board == "bergamot" || board == "plum" {
+        if board == "bergamot" || board == "plum" || board == "pickle" {
             adb.shell(
                 &format!(
                     "echo 188 > /sys/class/leds/{p}:white:clockA0/brightness && \
@@ -558,6 +558,44 @@ fn verify_bergamot_peripherals(board: &str, adb: &AdbClient) -> Result<(), Strin
     }
     println!(
         "[{}] Bergamot ACM8625P (bergamot-acm8625.cfg), HUSB238 PD (12V Good) & AW21036 brightness_scale verified!",
+        board
+    );
+    Ok(())
+}
+
+fn verify_pickle_peripherals(board: &str, adb: &AdbClient) -> Result<(), String> {
+    let pickle_out = adb.shell(
+        "cat /sys/bus/i2c/devices/2-002c/settings_file; \
+         cat /sys/class/power_supply/ya_pd/device/name; \
+         cat /sys/class/power_supply/ya_pd/health; \
+         cat /sys/class/power_supply/ya_pd/voltage_now; \
+         cat /sys/bus/i2c/devices/3-0012/name; \
+         cat /sys/class/graphics/fb0/name; \
+         cat /sys/class/graphics/fb1/name; \
+         cat /sys/class/leds/pickle:white:clockA0/device/brightness_scale",
+        Duration::from_secs(8),
+    )?;
+    let lines: Vec<&str> = pickle_out
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.first().copied() != Some("pickle-acm8625-psy02272001.cfg")
+        || lines.get(1).copied() != Some("husb238_pd")
+        || lines.get(2).copied() != Some("Good")
+        || lines.get(3).copied() != Some("12000")
+        || lines.get(4).copied() != Some("aw933xx_aw9610x")
+        || lines.get(5).copied() != Some("ring")
+        || lines.get(6).copied() != Some("logo")
+        || !lines.get(7).map(|s| s.contains(';')).unwrap_or(false)
+    {
+        return Err(format!(
+            "[{}] Unexpected pickle ACM8625 / HUSB238 PD / AW933XX / fb0..fb1 sysfs state: {:?}",
+            board, lines
+        ));
+    }
+    println!(
+        "[{}] Pickle ACM8625 (pickle-acm8625-psy02272001.cfg), HUSB238 PD (12V Good), AW933XX touch & fb0/fb1 verified!",
         board
     );
     Ok(())
@@ -1200,6 +1238,9 @@ pub fn run_board_verification(
 
         if board == "bergamot" {
             verify_bergamot_peripherals(board, &adb)?;
+        }
+        if board == "pickle" {
+            verify_pickle_peripherals(board, &adb)?;
         }
         if board == "mango" {
             verify_mango_peripherals(board, &adb)?;

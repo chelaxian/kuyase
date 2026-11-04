@@ -228,7 +228,13 @@ pub fn sync_immediate_led_state(state: &BridgeState) {
 
     if state.alice_state() == AliceState::Idle && state.forced_led_pattern.lock().unwrap().is_empty()
     {
-        let aux = if aux_zones > 0 {
+        let aux_had_native = state
+            .native_aux_frame
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|p| p[0] > 0 || p[1] > 0 || p[2] > 0);
+        let aux = if aux_zones > 0 && aux_had_native {
             Some(vec![[0u8; 3]; aux_zones])
         } else {
             None
@@ -254,6 +260,7 @@ pub fn spawn_native_led_animator(state: Arc<BridgeState>) {
 
         let mut frame_idx = 0usize;
         let mut was_active = false;
+        let mut was_aux_active = false;
 
         loop {
             let now = now_millis();
@@ -278,6 +285,7 @@ pub fn spawn_native_led_animator(state: Arc<BridgeState>) {
                 was_active = true;
                 if let Some(c) = parse_rgb_hex_pattern(&forced) {
                     let aux = if aux_zones > 0 {
+                        was_aux_active = true;
                         Some(vec![c; aux_zones])
                     } else {
                         None
@@ -300,6 +308,7 @@ pub fn spawn_native_led_animator(state: Arc<BridgeState>) {
                 };
                 let (ref px, dur_ms) = frames[frame_idx % frames.len()];
                 let aux = if aux_zones > 0 && !ambilight_violet.is_empty() {
+                    was_aux_active = true;
                     Some(ambilight_violet[frame_idx % ambilight_violet.len()].0.clone())
                 } else {
                     None
@@ -313,6 +322,7 @@ pub fn spawn_native_led_animator(state: Arc<BridgeState>) {
             if state.full_mode {
                 if was_active {
                     was_active = false;
+                    was_aux_active = false;
                     frame_idx = 0;
                     *state.native_led_frame.lock().unwrap() = vec![[0u8; 3]; ring_leds];
                     if aux_zones > 0 {
@@ -334,6 +344,7 @@ pub fn spawn_native_led_animator(state: Arc<BridgeState>) {
                     };
                     let (ref px, dur_ms) = frames[frame_idx % frames.len()];
                     let aux = if aux_zones > 0 && !ambilight_violet.is_empty() {
+                        was_aux_active = true;
                         Some(ambilight_violet[frame_idx % ambilight_violet.len()].0.clone())
                     } else {
                         None
@@ -351,6 +362,7 @@ pub fn spawn_native_led_animator(state: Arc<BridgeState>) {
                 was_active = true;
                 let (ref px, _) = mute_frames[0];
                 let aux = if aux_zones > 0 {
+                    was_aux_active = true;
                     Some(vec![[180, 0, 0]; aux_zones])
                 } else {
                     None
@@ -364,7 +376,8 @@ pub fn spawn_native_led_animator(state: Arc<BridgeState>) {
             if was_active {
                 was_active = false;
                 frame_idx = 0;
-                let aux = if aux_zones > 0 {
+                let aux = if aux_zones > 0 && was_aux_active {
+                    was_aux_active = false;
                     Some(vec![[0u8; 3]; aux_zones])
                 } else {
                     None

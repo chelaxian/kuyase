@@ -48,6 +48,7 @@ CANONICAL_STATION_HOSTNAME: Dict[str, str] = {
     "yandexmini2": "yandexmini_2",
     "yandexmini2nc": "yandexmini_2",
     "bergamot": "bergamot",
+    "pickle": "pickle",
     "plum": "plum",
     "plumnc": "plum",
     "yandexmicro": "yandexmicro",

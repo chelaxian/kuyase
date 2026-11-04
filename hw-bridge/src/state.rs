@@ -98,6 +98,11 @@ impl BoardProfile {
                 || Path::new("/lib/firmware/bergamot-acm8625.cfg").exists()
             {
                 "bergamot".to_string()
+            } else if Path::new("/sys/class/leds/pickle:red:ring0").exists()
+                || Path::new("/boot/yandex-pickle-i2ctop-overlay.dtb").exists()
+                || Path::new("/lib/firmware/pickle-acm8625-psy02272001.cfg").exists()
+            {
+                "pickle".to_string()
             } else if Path::new("/sys/class/leds/mango:red:ring0").exists()
                 || Path::new("/sys/class/leds/mango:red:ring1").exists()
                 || Path::new("/lib/firmware/mango-acm8625.cfg").exists()

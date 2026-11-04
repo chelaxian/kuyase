@@ -189,7 +189,7 @@ pub const BOARD_CATALOG: &[BoardDescriptor] = &[
         gui_label: "pickle — Станция Мини 3 Про (16 LED + Часы + 6 LED Лого)",
         sysfs_prefix: "pickle",
         ring_leds: 16,
-        ring_driver: "sysfs",
+        ring_driver: "framebuffer",
         ring_fb_dev: "/dev/fb0",
         logo_leds: 6,
         ambilight_leds: 0,
@@ -256,7 +256,7 @@ pub fn normalize_board_slug(raw: &str) -> String {
         "mini2" | "yandexmini_2" | "yandexmini2" => "yandexmini2".to_string(),
         "mini2nc" | "yandexmini_2_nc" | "yandexmini2nc" => "yandexmini2nc".to_string(),
         "mini3" | "yandexmini_3" | "yandexmini3" | "bergamot" => "bergamot".to_string(),
-        "mini3pro" | "pickle" => "pickle".to_string(),
+        "mini3pro" | "yandexmini_3_pro" | "yandexmini3pro" | "pickle" => "pickle".to_string(),
         "lite2" | "plum" => "plum".to_string(),
         "prune" | "lite2nc" | "plumnc" => "plumnc".to_string(),
         "midi" | "cucumber" => "cucumber".to_string(),
@@ -297,7 +297,11 @@ pub fn detect_board_slug_from_probe(dev_type_cfg: &str, model_raw: &str) -> Stri
     {
         return "bergamot".to_string();
     }
-    if model_lc.contains("pickle") {
+    if model_lc.contains("pickle")
+        || model_lc.contains("yandexmini_3_pro")
+        || model_lc.contains("yandexmini3pro")
+        || model_lc.contains("mini3pro")
+    {
         return "pickle".to_string();
     }
     if model_lc.contains("mango") || model_lc.contains("street") {

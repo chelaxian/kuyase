@@ -454,6 +454,8 @@ mod tests {
         assert_eq!(normalize_board_slug("mini2nc"), "yandexmini2nc");
         assert_eq!(normalize_board_slug("mini3"), "bergamot");
         assert_eq!(normalize_board_slug("yandexmini3"), "bergamot");
+        assert_eq!(normalize_board_slug("mini3pro"), "pickle");
+        assert_eq!(normalize_board_slug("yandexmini3pro"), "pickle");
         assert_eq!(normalize_board_slug("lite1"), "yandexmicro");
         assert_eq!(normalize_board_slug("lite2"), "plum");
         assert_eq!(normalize_board_slug("prune"), "plumnc");
@@ -468,6 +470,11 @@ mod tests {
         assert_eq!(
             detect_board_hint_from_filename("bergamot-0.373.1.13-rootfs.tar.gz").as_deref(),
             Some("bergamot")
+        );
+        assert_eq!(
+            detect_board_hint_from_filename("pickle-mini3pro-kuyase-sanitized-20261104.zip")
+                .as_deref(),
+            Some("pickle")
         );
         assert_eq!(
             detect_board_hint_from_filename("station-lite-rootfs-2026-10-24.tgz").as_deref(),
@@ -532,6 +539,14 @@ mod tests {
         assert_eq!(
             detect_board_slug_from_probe("", "yandex,mango amlogic,a1 Yandex Station Mango DVT"),
             "mango"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("pickle", "yandex,pickle amlogic,a4"),
+            "pickle"
+        );
+        assert_eq!(
+            detect_board_slug_from_probe("", "yandex,pickle amlogic,a4 Yandex Pickle"),
+            "pickle"
         );
     }
 }

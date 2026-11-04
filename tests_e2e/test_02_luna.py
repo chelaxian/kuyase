@@ -105,6 +105,7 @@ def build_luna_install_and_api_exec_script(
     # so the unmodified `nyakokitsu/luna/install.sh` runs inside the guest `/bin/sh`.
     sysfs_led_boards = (
         "cucumber",
+        "pickle",
         "yandexmini2",
         "yandexmini2nc",
         "plum",
@@ -113,7 +114,7 @@ def build_luna_install_and_api_exec_script(
         "mango",
     )
     switch_trigger = (
-        'for t in /sys/class/leds/*:ring*/trigger; do [ -e "$t" ] && echo none > "$t" 2>/dev/null || true; done'
+        'for t in /sys/class/leds/*:ring*/trigger; do [ -e "$t" ] && echo "[none]" > "$t" 2>/dev/null || true; done'
         if board in sysfs_led_boards
         else ":"
     )

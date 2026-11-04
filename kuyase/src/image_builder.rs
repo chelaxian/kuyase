@@ -48,6 +48,11 @@ pub fn detect_board_from_tree(tree: &RootfsTree) -> String {
     if tree.get("lib/firmware/bergamot-acm8625.cfg").is_some() {
         return "bergamot".to_string();
     }
+    if tree.get("boot/yandex-pickle-i2ctop-overlay.dtb").is_some()
+        || tree.get("lib/firmware/pickle-acm8625-psy02272001.cfg").is_some()
+    {
+        return "pickle".to_string();
+    }
 
     // 2. Fallback to `quasar.cfg` (disambiguating NC variants by platform IDs)
     if let Some(cfg_bytes) = tree.get_file_bytes("system/vendor/quasar/quasar.cfg") {

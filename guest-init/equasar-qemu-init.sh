@@ -133,6 +133,8 @@ if [ "$BOARD" = "auto" ] || [ -z "$BOARD" ]; then
     "")
       if [ -e /lib/firmware/bergamot-acm8625.cfg ]; then
         BOARD="bergamot"
+      elif [ -e /boot/yandex-pickle-i2ctop-overlay.dtb ] || [ -e /lib/firmware/pickle-acm8625-psy02272001.cfg ]; then
+        BOARD="pickle"
       elif [ -e /lib/firmware/mango-acm8625.cfg ]; then
         BOARD="mango"
       elif [ -e /etc/init.d/S61leds_brightness ]; then
@@ -153,7 +155,7 @@ case "$BOARD" in
   mini2|yandexmini_2)        BOARD="yandexmini2" ;;
   mini2nc|yandexmini_2_nc)   BOARD="yandexmini2nc" ;;
   mini3|yandexmini_3|yandexmini3) BOARD="bergamot" ;;
-  mini3pro)                  BOARD="pickle" ;;
+  mini3pro|yandexmini_3_pro|yandexmini3pro) BOARD="pickle" ;;
   lite2)                     BOARD="plum" ;;
   prune|lite2nc|plumnc)      BOARD="plumnc" ;;
   lite1|micro)               BOARD="yandexmicro" ;;
@@ -164,7 +166,46 @@ case "$BOARD" in
 esac
 
 export QUASAR_BOARD="$BOARD"
-hostname "qemu-${BOARD}" 2>/dev/null || true
+echo "qemu-${BOARD}" > /proc/sys/kernel/hostname 2>/dev/null || hostname "qemu-${BOARD}" 2>/dev/null || true
+echo "qemu-${BOARD}" > /etc/hostname 2>/dev/null || true
+if ! command -v hostname >/dev/null 2>&1; then
+  mkdir -p /usr/local/bin
+  cat > /usr/local/bin/hostname << 'EOF'
+#!/bin/sh
+if [ $# -gt 0 ]; then
+  echo "$1" > /proc/sys/kernel/hostname 2>/dev/null || sysctl -w "kernel.hostname=$1" >/dev/null 2>&1 || true
+else
+  cat /proc/sys/kernel/hostname 2>/dev/null || uname -n
+fi
+EOF
+  chmod 0755 /usr/local/bin/hostname 2>/dev/null || true
+  ln -sfn /usr/local/bin/hostname /bin/hostname 2>/dev/null || true
+fi
+if ! grep -q '127\.0\.0\.1' /etc/hosts 2>/dev/null; then
+  cat > /etc/hosts << EOF
+127.0.0.1	localhost
+127.0.1.1	qemu-${BOARD} ${BOARD}
+::1		localhost ip6-localhost ip6-loopback
+EOF
+fi
+if [ ! -f /etc/nsswitch.conf ]; then
+  cat > /etc/nsswitch.conf << 'EOF'
+passwd:     files
+group:      files
+shadow:     files
+hosts:      files dns
+networks:   files
+protocols:  files
+services:   files
+EOF
+fi
+if [ ! -x /usr/bin/yandex-wifichipmodel ]; then
+  cat > /usr/bin/yandex-wifichipmodel << 'EOF'
+#!/bin/sh
+echo "Broadcom"
+EOF
+  chmod 0755 /usr/bin/yandex-wifichipmodel 2>/dev/null || true
+fi
 
 # 2. Ensure loopback is up (eth0 is configured via kernel `ip=dhcp`) and DNS resolver is configured
 ip link set lo up 2>/dev/null || ifconfig lo 127.0.0.1 up 2>/dev/null || true
@@ -291,7 +332,7 @@ case "$BOARD" in
     printf "Yandex Pickle\0" > /tmp/fake-dt/model
     printf "yandex,pickle\0amlogic,a4\0" > /tmp/fake-dt/compatible
     BOARD_NAME="Яндекс Станция Мини 3 Про (pickle)"
-    SYSFS_PREFIX="pickle"; RING_LEDS=16; LOGO_LEDS=6; AMBILIGHT_LEDS=0; HAS_CLOCK="true"; LED_DRIVER="sysfs"
+    SYSFS_PREFIX="pickle"; RING_LEDS=16; LOGO_LEDS=6; AMBILIGHT_LEDS=0; HAS_CLOCK="true"; LED_DRIVER="framebuffer"
     ;;
   plum)
     printf "Yandex Plum EVT2\0" > /tmp/fake-dt/model
@@ -414,6 +455,11 @@ else
       write_fb_geom fb0 24 1 24
       write_fb_geom fb1 6 1 24
       ;;
+    pickle)
+      echo "logo" > /sys/class/graphics/fb1/name
+      write_fb_geom fb0 16 1 24
+      write_fb_geom fb1 6 1 24
+      ;;
     bergamot)
       write_fb_geom fb0 6 1 24
       ;;
@@ -516,7 +562,7 @@ if [ "$LED_DRIVER" != "i2c_sn3236" ]; then
     ln -sfn "${SYSFS_PREFIX}:white:clock-p3" "/sys/class/leds/${SYSFS_PREFIX}:white:clockDH"
     ln -sfn "${SYSFS_PREFIX}:white:clock-q3" "/sys/class/leds/${SYSFS_PREFIX}:white:clockDL"
     ln -sfn "${SYSFS_PREFIX}:white:clock-m1" "/sys/class/leds/${SYSFS_PREFIX}:white:clockDM"
-    if [ "$BOARD" = "bergamot" ] || [ "$BOARD" = "plum" ]; then
+    if [ "$BOARD" = "bergamot" ] || [ "$BOARD" = "plum" ] || [ "$BOARD" = "pickle" ]; then
       for pos in 1 2 3 4; do
         idx=$((pos - 1))
         for part in a b c d e f g; do
@@ -524,12 +570,10 @@ if [ "$LED_DRIVER" != "i2c_sn3236" ]; then
           ln -sfn "${SYSFS_PREFIX}:white:clock-${part}${pos}" "/sys/class/leds/${SYSFS_PREFIX}:white:clock${up}${idx}"
         done
       done
-      if [ "$BOARD" = "plum" ]; then
-        ln -sfn "${SYSFS_PREFIX}:white:clock-h1" "/sys/class/leds/${SYSFS_PREFIX}:white:clockH0"
-        ln -sfn "${SYSFS_PREFIX}:white:clock-h2" "/sys/class/leds/${SYSFS_PREFIX}:white:clockH1"
-        ln -sfn "${SYSFS_PREFIX}:white:clock-l1" "/sys/class/leds/${SYSFS_PREFIX}:white:clockH2"
-        ln -sfn "${SYSFS_PREFIX}:white:clock-l2" "/sys/class/leds/${SYSFS_PREFIX}:white:clockH3"
-      fi
+      ln -sfn "${SYSFS_PREFIX}:white:clock-h1" "/sys/class/leds/${SYSFS_PREFIX}:white:clockH0"
+      ln -sfn "${SYSFS_PREFIX}:white:clock-h2" "/sys/class/leds/${SYSFS_PREFIX}:white:clockH1"
+      ln -sfn "${SYSFS_PREFIX}:white:clock-l1" "/sys/class/leds/${SYSFS_PREFIX}:white:clockH2"
+      ln -sfn "${SYSFS_PREFIX}:white:clock-l2" "/sys/class/leds/${SYSFS_PREFIX}:white:clockH3"
     else
       for pos in 1 2 3 4; do
         for part in a b c d e f g; do
@@ -622,6 +666,24 @@ elif [ "$BOARD" = "bergamot" ]; then
   echo 12000 > /sys/class/power_supply/ya_pd/voltage_now
   echo 1500 > /sys/class/power_supply/ya_pd/current_now
   echo '[{"name":"main","assembly":"00000000001"}]' > /sys/devices/platform/pcba_ids/pcba_ids_drv/pcba_ids
+elif [ "$BOARD" = "pickle" ]; then
+  mkdir -p /sys/bus/i2c/devices/2-002c /sys/bus/i2c/devices/2-0034 /sys/bus/i2c/devices/3-0012 \
+           /sys/module/key_aw933xx/drivers/i2c:aw933xx_aw9610x/3-0012
+  echo "acm8625" > /sys/bus/i2c/devices/2-002c/name
+  echo "pickle-acm8625-psy02272001.cfg" > /sys/bus/i2c/devices/2-002c/settings_file
+  echo "pickle-acm8625-psy02272001.cfg" > /sys/bus/i2c/devices/2-002c/default_settings
+  ln -sfn /sys/bus/i2c/devices/2-002c/settings_file /tmp/amp_settings_file
+  ln -sfn /sys/bus/i2c/devices/2-002c/default_settings /tmp/amp_default_settings
+  echo "880000 0 880000 0 880000 0" > /sys/bus/i2c/devices/2-0034/current_coefs
+  echo "aw933xx_aw9610x" > /sys/bus/i2c/devices/3-0012/name
+  echo 0 > /sys/bus/i2c/devices/3-0012/update
+  echo "aw933xx_reg.bin" > /sys/module/key_aw933xx/drivers/i2c:aw933xx_aw9610x/3-0012/config
+  mkdir -p /sys/class/power_supply/ya_pd/device /sys/devices/platform/pcba_ids/pcba_ids_drv
+  echo "husb238_pd" > /sys/class/power_supply/ya_pd/device/name
+  echo "Good" > /sys/class/power_supply/ya_pd/health
+  echo 12000 > /sys/class/power_supply/ya_pd/voltage_now
+  echo 1500 > /sys/class/power_supply/ya_pd/current_now
+  echo '[{"name":"main","assembly":"1"},{"name":"top","assembly":"1"}]' > /sys/devices/platform/pcba_ids/pcba_ids_drv/pcba_ids
 elif [ "$BOARD" = "mango" ]; then
   mkdir -p /sys/bus/i2c/devices/2-002c
   echo "acm8625s" > /sys/bus/i2c/devices/2-002c/name

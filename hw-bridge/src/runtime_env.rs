@@ -574,6 +574,83 @@ pub fn ensure_quasar_cfg_dev_config_under(root: &Path) {
     }
 }
 
+/// Ensures `/proc/sys/kernel/hostname`, `/etc/hosts` (`127.0.0.1 localhost`), `/etc/nsswitch.conf`,
+/// `/usr/local/bin/hostname` (`/bin/hostname`), and `/usr/bin/yandex-wifichipmodel` exist on
+/// minimal Buildroot images (such as `pickle`) where BusyBox omits `hostname` or `/etc/hosts` is absent.
+pub fn ensure_hostname_utility_under(root: &Path, board_slug: &str) {
+    let host_name = if board_slug.is_empty() {
+        "qemu-quasar".to_string()
+    } else {
+        format!("qemu-{}", board_slug)
+    };
+    if root == Path::new("/") {
+        let _ = fs::write("/proc/sys/kernel/hostname", format!("{}\n", host_name));
+    }
+    let etc_dir = root.join("etc");
+    let _ = fs::create_dir_all(&etc_dir);
+    let hosts_path = etc_dir.join("hosts");
+    let has_localhost = fs::read_to_string(&hosts_path)
+        .map(|s| s.contains("127.0.0.1") && s.contains("localhost"))
+        .unwrap_or(false);
+    if !has_localhost {
+        let _ = fs::write(
+            &hosts_path,
+            format!(
+                "127.0.0.1\tlocalhost\n127.0.1.1\t{} {}\n::1\t\tlocalhost ip6-localhost ip6-loopback\n",
+                host_name, board_slug
+            ),
+        );
+    }
+    let nss_path = etc_dir.join("nsswitch.conf");
+    if !nss_path.exists() {
+        let _ = fs::write(
+            &nss_path,
+            "passwd:     files\ngroup:      files\nshadow:     files\nhosts:      files dns\nnetworks:   files\nprotocols:  files\nservices:   files\n",
+        );
+    }
+
+    let usr_bin_dir = root.join("usr/bin");
+    if usr_bin_dir.is_dir() {
+        let wifichip = usr_bin_dir.join("yandex-wifichipmodel");
+        if !wifichip.exists() {
+            if fs::write(&wifichip, "#!/bin/sh\necho \"Broadcom\"\n").is_ok() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&wifichip, fs::Permissions::from_mode(0o755));
+                }
+            }
+        }
+    }
+
+    let bin_hostname = root.join("bin/hostname");
+    let usr_bin_hostname = root.join("usr/bin/hostname");
+    if bin_hostname.exists() || usr_bin_hostname.exists() {
+        return;
+    }
+    let local_bin_dir = root.join("usr/local/bin");
+    if fs::create_dir_all(&local_bin_dir).is_err() {
+        return;
+    }
+    let local_hostname = local_bin_dir.join("hostname");
+    const HOSTNAME_SCRIPT: &str = "#!/bin/sh\nif [ $# -gt 0 ]; then\n  echo \"$1\" > /proc/sys/kernel/hostname 2>/dev/null || sysctl -w \"kernel.hostname=$1\" >/dev/null 2>&1 || true\nelse\n  cat /proc/sys/kernel/hostname 2>/dev/null || uname -n\nfi\n";
+    if fs::write(&local_hostname, HOSTNAME_SCRIPT).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&local_hostname, fs::Permissions::from_mode(0o755));
+            if root.join("bin").is_dir() {
+                let target = if root == Path::new("/") {
+                    PathBuf::from("/usr/local/bin/hostname")
+                } else {
+                    local_hostname
+                };
+                let _ = std::os::unix::fs::symlink(target, &bin_hostname);
+            }
+        }
+    }
+}
+
 /// Ensures fallback `/system/vendor/quasar/set_volume.sh` exists on boards (such as `cucumber`)
 /// where hardware volume is normally handled by `hardvold` and `set_volume.sh` is omitted from the image.
 pub fn ensure_fallback_set_volume_sh_under(root: &Path) {
@@ -970,6 +1047,7 @@ pub fn ensure_dbus_system_config_under(root: &Path) {
 /// `Full Mode` (`quasar.mode=full`) D-Bus / BlueZ initialization without rebuilding `.ext4` images.
 pub fn prepare_runtime_environment(board_slug: &str, full_mode: bool) {
     let root = Path::new("/");
+    ensure_hostname_utility_under(root, board_slug);
     ensure_unified_var_run_under(root);
     ensure_dbus_launch_helper_permissions_under(root);
     ensure_dbus_system_config_under(root);
@@ -1157,14 +1235,25 @@ mod tests {
     fn test_unified_logs_and_fallback_set_volume() {
         let root = make_temp_root("logs-vol");
         fs::create_dir_all(root.join("system/vendor/quasar")).unwrap();
+        fs::create_dir_all(root.join("usr/bin")).unwrap();
+        fs::create_dir_all(root.join("bin")).unwrap();
         fs::write(
             root.join("system/vendor/quasar/quasar.cfg"),
             "{\n   \"common\": {\"deviceType\": \"bergamot\"}\n}\n",
         )
         .unwrap();
+        ensure_hostname_utility_under(&root, "pickle");
         ensure_unified_log_symlinks_under(&root);
         ensure_quasar_cfg_dev_config_under(&root);
         ensure_fallback_set_volume_sh_under(&root);
+
+        assert!(root.join("etc/hosts").exists());
+        assert!(fs::read_to_string(root.join("etc/hosts"))
+            .unwrap()
+            .contains("127.0.0.1\tlocalhost"));
+        assert!(root.join("etc/nsswitch.conf").exists());
+        assert!(root.join("usr/local/bin/hostname").exists());
+        assert!(root.join("usr/bin/yandex-wifichipmodel").exists());
 
         assert!(root.join("tmp/daemons_logs/maind.log").exists());
         assert!(root.join("data/quasar/daemons_logs/maind.log").exists());
