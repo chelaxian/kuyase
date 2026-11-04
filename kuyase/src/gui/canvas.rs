@@ -614,8 +614,8 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                     .sense(Sense::hover()),
                                 )
                                 .on_hover_text(
-                                    "На Станции 3 (orion) нет оптического датчика VL53L0X (ToF).\n\
-                                     Вместо него используется отдельный ультразвуковой TDM-тракт pcm.ultrasound (96 кГц, несущая 38.4 кГц) через четвёртый усилитель ACM8625S (2-002c) и микрофонную матрицу.",
+                                    "Отдельный ультразвуковой TDM-тракт Станции 3 (orion): pcm.ultrasound (96 кГц, несущая 38.4 кГц)\n\
+                                     через четвёртый усилитель ACM8625S (2-002c) и микрофонную матрицу для акустического определения дистанции.",
                                 );
                             } else {
                                 let als_label =
@@ -633,7 +633,7 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                 )
                                 .on_hover_text(
                                     "Датчик внешней освещённости ALS (ltr308als01 в /sys/bus/iio/devices/iio:device0/in_illuminance_raw).\n\
-                                     Используется прошивкой для автояркости светового кольца и дисплея часов (оптического датчика жестов VL53L0X на этой модели нет).",
+                                     Используется прошивкой для автоматической регулировки яркости Светового кольца (LED Ring) и дисплея часов.",
                                 );
 
                                 if board_slug == "mango" {
