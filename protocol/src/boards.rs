@@ -232,11 +232,9 @@ pub fn default_board_ring_leds(slug: &str) -> usize {
         .unwrap_or(6)
 }
 
-pub fn board_has_segment_clock(slug: &str, snapshot_has_clock: bool) -> bool {
-    if slug == "yandexmini2nc" || slug == "plumnc" {
-        return false;
-    }
-    snapshot_has_clock
+pub fn board_has_segment_clock(slug: &str, snapshot_has_clock: bool, display_kind: &str) -> bool {
+    display_kind == "segment_clock"
+        || snapshot_has_clock
         || find_board_descriptor(slug)
             .map(|b| b.has_clock)
             .unwrap_or(false)

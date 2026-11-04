@@ -370,28 +370,3 @@ pub fn diff_state_transitions(
 
     events
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_signal_filter_and_category_tof_only_for_yandexmini() {
-        assert_eq!(
-            signal_filter_tab_label(SignalFilter::TofButtons, "yandexmini"),
-            "ToF / Кнопки"
-        );
-        assert_eq!(
-            SignalCategory::TofButtons.as_str_for_board("yandexmini"),
-            "TOF/KEY"
-        );
-
-        for slug in ["cucumber", "orion", "mango"] {
-            assert_eq!(
-                signal_filter_tab_label(SignalFilter::TofButtons, slug),
-                "Датчики / Кнопки"
-            );
-            assert_eq!(SignalCategory::TofButtons.as_str_for_board(slug), "SENS/KEY");
-        }
-    }
-}

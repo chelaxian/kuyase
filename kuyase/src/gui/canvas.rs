@@ -1,6 +1,5 @@
 use crate::gui::display_geom::{
-    board_enclosure_shape, board_has_matrix_21x12, board_has_segment_clock,
-    circle_enclosure_layout, circle_puck_subtype, cucumber_ring_led_pos, default_board_ring_leds,
+    board_enclosure_shape, circle_enclosure_layout, circle_puck_subtype, cucumber_ring_led_pos,
     enclosure_button_pos, enclosure_hover_inspector_text, hit_test_enclosure_target,
     led_ring_position, mango_battery_led_rgb, mango_enclosure_layout, orion_ambilight_led_pos,
     orion_ring_led_pos, station2_light_panel_dot_pos, station2_light_panel_rect, CirclePuckSubtype,
@@ -12,8 +11,10 @@ use crate::gui::faceplates::{
 };
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Margin, Pos2, RichText, Sense, Stroke, Vec2};
-use protocol::{BridgeStateSnapshot, HostCommand};
-use std::collections::BTreeMap;
+use protocol::{
+    board_has_matrix_21x12, board_has_segment_clock, default_board_ring_leds, BridgeStateSnapshot,
+    HostCommand,
+};
 use std::time::Duration;
 
 pub(crate) fn draw_ring_led(painter: &egui::Painter, pos: Pos2, radius: f32, rgb: [u8; 3]) {
@@ -987,30 +988,16 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
         app.latest_state = None;
     }
 
-    let board_slug = app
-        .latest_state
-        .as_ref()
-        .map(|s| s.board_slug.clone())
-        .unwrap_or_else(|| app.config.selected_board.clone());
+    let board_slug = app.active_board_slug();
 
-    let mut st = app.latest_state.clone().unwrap_or_else(|| {
-        let mut segs = BTreeMap::new();
-        for (k, &on) in &app.clock_active_mask {
-            if on && app.clock_brightness > 0 {
-                segs.insert(k.clone(), app.clock_brightness);
-            }
-        }
-        BridgeStateSnapshot {
-            board_slug: board_slug.clone(),
-            board_name: crate::gui::board_display_label(&board_slug),
-            ring_leds: default_board_ring_leds(&board_slug),
-            tof_mm: app.tof_slider,
-            doa_angle: app.doa_slider,
-            volume_level: app.volume_slider,
-            clock_segments: segs,
-            screen_pixels: app.matrix_custom_pixels.clone(),
-            ..Default::default()
-        }
+    let mut st = app.latest_state.clone().unwrap_or_else(|| BridgeStateSnapshot {
+        board_slug: board_slug.clone(),
+        board_name: crate::gui::board_display_label(&board_slug),
+        ring_leds: default_board_ring_leds(&board_slug),
+        tof_mm: app.tof_slider,
+        doa_angle: app.doa_slider,
+        volume_level: app.volume_slider,
+        ..Default::default()
     });
     if !bridge_online {
         st.tof_mm = app.tof_slider;
@@ -1403,9 +1390,9 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
 
                     // 2. Dynamic Front Faceplate Display (Segment Clock OR 21x12 Matrix)
                     stage_box_frame(ui, |ui| {
-                        if board_has_matrix_21x12(&board_slug, &st) {
+                        if board_has_matrix_21x12(&board_slug, &st.display_kind) {
                             render_matrix_21x12_faceplate(ui, app, &st, bridge_online);
-                        } else if board_has_segment_clock(&board_slug, &st) {
+                        } else if board_has_segment_clock(&board_slug, st.has_clock, &st.display_kind) {
                             render_segment_clock_faceplate(ui, app, &board_slug, &st, bridge_online);
                         } else if board_slug == "mango" {
                             ui.label(

@@ -4,11 +4,7 @@ use eframe::egui::{self, Color32, RichText};
 use protocol::HostCommand;
 
 pub fn render_board_specific_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
-    let board_slug = app
-        .latest_state
-        .as_ref()
-        .map(|s| s.board_slug.clone())
-        .unwrap_or_else(|| app.config.selected_board.clone());
+    let board_slug = app.active_board_slug();
     let desc = protocol::find_board_descriptor(&board_slug);
     let has_ultrasound = desc.map(|d| d.has_ultrasound).unwrap_or(false);
     let is_sn3236 = desc.map(|d| d.ring_driver == "i2c_sn3236").unwrap_or(false);
@@ -384,20 +380,16 @@ fn render_pickle_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
         true,
         |ui| {
             if ui.button("Алиса Про (#00FF80 + #6B0FFF)").clicked() {
-                let latest = app.latest_state.get_or_insert_with(|| protocol::BridgeStateSnapshot {
-                    board_slug: app.config.selected_board.clone(),
-                    board_name: protocol::board_display_label(&app.config.selected_board),
-                    ring_leds: protocol::default_board_ring_leds(&app.config.selected_board),
-                    ..Default::default()
-                });
-                latest.logo_pixels = vec![
-                    [0x00, 0xff, 0x80],
-                    [0x6b, 0x0f, 0xff],
-                    [0x00, 0xff, 0x80],
-                    [0x6b, 0x0f, 0xff],
-                    [0x00, 0xff, 0x80],
-                    [0x6b, 0x0f, 0xff],
-                ];
+                if let Some(ref mut latest) = app.latest_state {
+                    latest.logo_pixels = vec![
+                        [0x00, 0xff, 0x80],
+                        [0x6b, 0x0f, 0xff],
+                        [0x00, 0xff, 0x80],
+                        [0x6b, 0x0f, 0xff],
+                        [0x00, 0xff, 0x80],
+                        [0x6b, 0x0f, 0xff],
+                    ];
+                }
                 if vm_on {
                     app.send_serial_command(
                         "printf '\\x00\\xff\\x80\\x6b\\x0f\\xff\\x00\\xff\\x80\\x6b\\x0f\\xff\\x00\\xff\\x80\\x6b\\x0f\\xff' > /dev/fb1",
@@ -408,40 +400,44 @@ fn render_pickle_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
                     pattern: "speaking".to_string(),
                 });
             }
-            if ui.button("Бирюзовый (#00E5FF)").clicked() {
-                app.selected_led_pattern = "rgb:#00E5FF".to_string();
-                app.send_command(HostCommand::SetLedPattern {
-                    pattern: "rgb:#00E5FF".to_string(),
-                });
-            }
-            if ui.button("Авто (ledfb-ring)").clicked() {
-                app.selected_led_pattern.clear();
-                app.send_command(HostCommand::SetLedPattern {
-                    pattern: String::new(),
-                });
-            }
-            if vm_on {
-                if ui
-                    .button("Ручной sysfs (trigger=[none])")
-                    .on_hover_text("Переключить триггер кольца в '[none]' для прямой записи в /sys/class/leds/pickle:*:ring*/brightness без конфликта")
-                    .clicked()
-                {
-                    app.send_serial_command(
-                        "for d in /sys/class/leds/pickle:*:ring*; do echo '[none]' > \"$d/trigger\"; done",
-                    );
-                }
-                if ui
-                    .button("Вернуть триггер ledfb-ring")
-                    .on_hover_text("Обнулить brightness в sysfs и вернуть управление кольцом штатному триггеру драйвера ledfb-ring")
-                    .clicked()
-                {
-                    app.send_serial_command(
-                        "for d in /sys/class/leds/pickle:*:ring*; do echo 0 > \"$d/brightness\"; echo '[ledfb-ring] none' > \"$d/trigger\"; done",
-                    );
-                }
-            }
+            render_sysfs_ring_action_buttons(ui, app, vm_on);
         },
     );
+}
+
+fn render_sysfs_ring_action_buttons(ui: &mut egui::Ui, app: &mut GuiAppState, vm_on: bool) {
+    if ui.button("Бирюзовый (#00E5FF)").clicked() {
+        app.selected_led_pattern = "rgb:#00E5FF".to_string();
+        app.send_command(HostCommand::SetLedPattern {
+            pattern: "rgb:#00E5FF".to_string(),
+        });
+    }
+    if ui.button("Авто (ledfb-ring)").clicked() {
+        app.selected_led_pattern.clear();
+        app.send_command(HostCommand::SetLedPattern {
+            pattern: String::new(),
+        });
+    }
+    if vm_on {
+        if ui
+            .button("Ручной sysfs (trigger=none)")
+            .on_hover_text("Переключить триггер кольца в 'none' для прямой записи в /sys/class/leds/*:ring*/brightness без конфликта")
+            .clicked()
+        {
+            app.send_serial_command(
+                "for d in /sys/class/leds/*:ring*; do echo none > \"$d/trigger\"; done",
+            );
+        }
+        if ui
+            .button("Вернуть триггер ledfb-ring")
+            .on_hover_text("Обнулить brightness в sysfs и вернуть управление кольцом штатному триггеру драйвера ledfb-ring")
+            .clicked()
+        {
+            app.send_serial_command(
+                "for d in /sys/class/leds/*:ring*; do echo 0 > \"$d/brightness\"; echo ledfb-ring > \"$d/trigger\"; done",
+            );
+        }
+    }
 }
 
 fn render_generic_sysfs_ring_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
@@ -450,6 +446,7 @@ fn render_generic_sysfs_ring_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
         .as_ref()
         .map(|s| (s.ring_trigger.clone(), s.led_trigger_conflict_count))
         .unwrap_or_else(|| ("ledfb-ring (Quasar Native)".to_string(), 0));
+    let vm_on = app.session.is_some();
     gnome_action_row(
         ui,
         "Драйвер светового кольца (sysfs / ledfb-ring)",
@@ -459,38 +456,7 @@ fn render_generic_sysfs_ring_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
         ),
         true,
         |ui| {
-            if ui.button("Бирюзовый (#00E5FF)").clicked() {
-                app.selected_led_pattern = "rgb:#00E5FF".to_string();
-                app.send_command(HostCommand::SetLedPattern {
-                    pattern: "rgb:#00E5FF".to_string(),
-                });
-            }
-            if ui.button("Авто (ledfb-ring)").clicked() {
-                app.selected_led_pattern.clear();
-                app.send_command(HostCommand::SetLedPattern {
-                    pattern: String::new(),
-                });
-            }
-            if app.session.is_some() {
-                if ui
-                    .button("Ручной sysfs (trigger=none)")
-                    .on_hover_text("Переключить триггер кольца в 'none' для прямой записи в /sys/class/leds/*:ring*/brightness без конфликта")
-                    .clicked()
-                {
-                    app.send_serial_command(
-                        "for d in /sys/class/leds/*:ring*; do echo none > \"$d/trigger\"; done",
-                    );
-                }
-                if ui
-                    .button("Вернуть триггер ledfb-ring")
-                    .on_hover_text("Обнулить brightness в sysfs и вернуть управление кольцом штатному триггеру драйвера ledfb-ring")
-                    .clicked()
-                {
-                    app.send_serial_command(
-                        "for d in /sys/class/leds/*:ring*; do echo 0 > \"$d/brightness\"; echo ledfb-ring > \"$d/trigger\"; done",
-                    );
-                }
-            }
+            render_sysfs_ring_action_buttons(ui, app, vm_on);
         },
     );
 }

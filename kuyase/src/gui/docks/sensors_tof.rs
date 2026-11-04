@@ -26,12 +26,7 @@ fn set_tof_distance(app: &mut GuiAppState, mm: u32) {
 }
 
 pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
-    let board_slug = app
-        .latest_state
-        .as_ref()
-        .map(|s| s.board_slug.clone())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| app.config.selected_board.clone());
+    let board_slug = app.active_board_slug();
     let (is_sn3236, has_ultrasound) = board_sensor_capabilities(&board_slug);
     let (card_title, card_subtitle) = if is_sn3236 {
         (

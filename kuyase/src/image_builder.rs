@@ -1,14 +1,10 @@
 use crate::archive_formats::{extract_payload_bytes_into_tree, extract_ubi_into_tree, UBI_EC_MAGIC};
 use crate::ext_fs::write_ext2_image;
-pub use crate::rootfs_tree::{
-    normalize_rel_path, read_tar_from_reader, read_tar_gz_into_tree, write_tree_to_tar_gz,
-    RootfsNode, RootfsNodeKind, RootfsTree,
-};
+pub use crate::rootfs_tree::{read_tar_from_reader, RootfsNodeKind, RootfsTree};
+use crate::rootfs_tree::{normalize_rel_path, read_tar_gz_into_tree, write_tree_to_tar_gz};
 use crate::session::{resolve_bridge_binary, EMBEDDED_HW_BRIDGE};
 use flate2::read::GzDecoder;
-pub use protocol::{
-    detect_board_hint_from_filename, detect_board_hint_from_path, normalize_board_slug,
-};
+use protocol::{detect_board_hint_from_path, normalize_board_slug};
 use std::fs::{self, File};
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};

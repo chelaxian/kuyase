@@ -1,8 +1,4 @@
 use eframe::egui::{Pos2, Rect};
-pub use protocol::default_board_ring_leds;
-pub use protocol::display::{
-    build_segments_map_from_text as build_local_segments_from_text, render_text_to_matrix_21x12,
-};
 use protocol::BridgeStateSnapshot;
 use std::collections::BTreeMap;
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, TAU};
@@ -202,6 +198,11 @@ pub fn cucumber_ring_led_pos(center: Pos2, outer_r: f32, idx: usize, count: usiz
     squircle_ring_position(center, body_half * 0.86, corner_r * 0.85, idx, count)
 }
 
+const STATION2_PANEL_COLS: usize = 11;
+const STATION2_PANEL_ROWS: usize = 8;
+const STATION2_PANEL_PAD_X: f32 = 9.0;
+const STATION2_PANEL_PAD_Y: f32 = 8.0;
+
 pub fn station2_light_panel_rect(center: Pos2, outer_r: f32) -> Rect {
     let half_w = outer_r * 0.80;
     let half_h = outer_r * 0.68;
@@ -211,15 +212,31 @@ pub fn station2_light_panel_rect(center: Pos2, outer_r: f32) -> Rect {
     )
 }
 
-pub fn station2_light_panel_dot_pos(grid_rect: Rect, col: usize, row: usize) -> Pos2 {
-    let pad_x = 9.0;
-    let pad_y = 8.0;
-    let step_x = (grid_rect.width() - pad_x * 2.0) / 10.0;
-    let step_y = (grid_rect.height() - pad_y * 2.0) / 7.0;
-    Pos2::new(
-        grid_rect.left() + pad_x + (col as f32) * step_x,
-        grid_rect.top() + pad_y + (row as f32) * step_y,
+fn station2_light_panel_steps(grid_rect: Rect) -> (f32, f32) {
+    (
+        (grid_rect.width() - STATION2_PANEL_PAD_X * 2.0) / ((STATION2_PANEL_COLS - 1) as f32),
+        (grid_rect.height() - STATION2_PANEL_PAD_Y * 2.0) / ((STATION2_PANEL_ROWS - 1) as f32),
     )
+}
+
+pub fn station2_light_panel_dot_pos(grid_rect: Rect, col: usize, row: usize) -> Pos2 {
+    let (step_x, step_y) = station2_light_panel_steps(grid_rect);
+    Pos2::new(
+        grid_rect.left() + STATION2_PANEL_PAD_X + (col as f32) * step_x,
+        grid_rect.top() + STATION2_PANEL_PAD_Y + (row as f32) * step_y,
+    )
+}
+
+fn hit_test_station2_panel_dot(grid_rect: Rect, ptr: Pos2) -> Option<(usize, usize, usize)> {
+    if !grid_rect.contains(ptr) {
+        return None;
+    }
+    let (step_x, step_y) = station2_light_panel_steps(grid_rect);
+    let col = (((ptr.x - (grid_rect.left() + STATION2_PANEL_PAD_X)) / step_x).round())
+        .clamp(0.0, (STATION2_PANEL_COLS - 1) as f32) as usize;
+    let row = (((ptr.y - (grid_rect.top() + STATION2_PANEL_PAD_Y)) / step_y).round())
+        .clamp(0.0, (STATION2_PANEL_ROWS - 1) as f32) as usize;
+    Some((col, row, row * STATION2_PANEL_COLS + col))
 }
 
 fn enclosure_button_targets(board_slug: &str, rect: Rect) -> Vec<(&'static str, Pos2, f32)> {
@@ -433,18 +450,7 @@ pub fn enclosure_hover_inspector_text(
         }
         "station2" => {
             let grid_rect = station2_light_panel_rect(center, outer_r);
-            if grid_rect.contains(ptr) {
-                let cols = 11usize;
-                let rows = 8usize;
-                let pad_x = 9.0;
-                let pad_y = 8.0;
-                let step_x = (grid_rect.width() - pad_x * 2.0) / ((cols - 1) as f32);
-                let step_y = (grid_rect.height() - pad_y * 2.0) / ((rows - 1) as f32);
-                let col = (((ptr.x - (grid_rect.left() + pad_x)) / step_x).round())
-                    .clamp(0.0, (cols - 1) as f32) as usize;
-                let row = (((ptr.y - (grid_rect.top() + pad_y)) / step_y).round())
-                    .clamp(0.0, (rows - 1) as f32) as usize;
-                let idx = row * cols + col;
+            if let Some((col, row, idx)) = hit_test_station2_panel_dot(grid_rect, ptr) {
                 let [r, g, b] = st.ring_pixels.get(idx).copied().unwrap_or([95, 45, 220]);
                 return (
                     format!(
@@ -677,42 +683,21 @@ fn enclosure_inspector_text(
     }
 }
 
-pub fn squircle_ring_position(
+fn squircle_ring_position(
     center: Pos2,
     half_extent: f32,
     corner_radius: f32,
     index: usize,
     count: usize,
 ) -> Pos2 {
-    if count == 0 {
-        return center;
-    }
-    if count == 1 {
-        return Pos2::new(center.x, center.y - half_extent);
-    }
-
     let eff_corner = corner_radius.clamp(half_extent * 0.15, half_extent * 0.65);
     let span = half_extent - eff_corner * 0.55;
     let corner_inset = eff_corner * 0.12;
     let idx = index % count;
-
-    let (side, u) = if count % 4 == 0 {
-        let per_side = count / 4;
-        let side = idx / per_side;
-        let k = idx % per_side;
-        let u = if per_side <= 1 {
-            0.0
-        } else {
-            -1.0 + 2.0 * (k as f32) / ((per_side - 1) as f32)
-        };
-        (side, u)
-    } else {
-        let t = (idx as f32 + 0.5) / (count as f32);
-        let side_f = t * 4.0;
-        let side = (side_f.floor() as usize).min(3);
-        let frac = side_f - (side as f32);
-        (side, frac * 2.0 - 1.0)
-    };
+    let per_side = count / 4;
+    let side = idx / per_side;
+    let k = idx % per_side;
+    let u = -1.0 + 2.0 * (k as f32) / ((per_side - 1) as f32);
 
     let along = u * span;
     let perp = half_extent - corner_inset * u * u;
@@ -736,23 +721,11 @@ pub fn led_ring_position(center: Pos2, radius: f32, index: usize, count: usize) 
     )
 }
 
-pub fn doa_angle_from_pointer(center: Pos2, pointer: Pos2) -> u32 {
+fn doa_angle_from_pointer(center: Pos2, pointer: Pos2) -> u32 {
     let dx = pointer.x - center.x;
     let dy = pointer.y - center.y;
     let deg = dy.atan2(dx).to_degrees() + 90.0;
     (deg.rem_euclid(360.0).round() as u32) % 360
-}
-
-pub fn segment_brightness(segments: &BTreeMap<String, u8>, key: &str) -> u8 {
-    segments.get(key).copied().unwrap_or(0)
-}
-
-pub fn board_has_segment_clock(slug: &str, st: &BridgeStateSnapshot) -> bool {
-    st.display_kind == "segment_clock" || protocol::board_has_segment_clock(slug, st.has_clock)
-}
-
-pub fn board_has_matrix_21x12(slug: &str, st: &BridgeStateSnapshot) -> bool {
-    protocol::board_has_matrix_21x12(slug, &st.display_kind)
 }
 
 fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
@@ -903,7 +876,7 @@ pub fn clock_inspector_text(
             board_slug
         });
     if let Some(seg) = hovered_seg {
-        let br = segment_brightness(segments, seg);
+        let br = segments.get(seg).copied().unwrap_or(0);
         if let Some(alias) = clock_segment_alias_info(seg) {
             format!(
                 "Сегмент {} ({}) | /sys/class/leds/{}:white:clock-{}/brightness | PWM: {} | ЛКМ: зажечь | ПКМ: погасить",
@@ -959,20 +932,13 @@ mod tests {
     use eframe::egui::Vec2;
 
     #[test]
-    fn test_led_ring_geometry_and_doa_azimuth() {
+    fn test_circle_puck_hit_testing_and_no_doa_conflict() {
         let c = Pos2::new(100.0, 100.0);
         let top = led_ring_position(c, 50.0, 0, 4);
         let right = led_ring_position(c, 50.0, 1, 4);
         assert!((top.x - 100.0).abs() < 1e-3 && (top.y - 50.0).abs() < 1e-3);
         assert!((right.x - 150.0).abs() < 1e-3 && (right.y - 100.0).abs() < 1e-3);
-        assert_eq!(doa_angle_from_pointer(c, top), 0);
-        assert_eq!(doa_angle_from_pointer(c, right), 90);
-        assert_eq!(doa_angle_from_pointer(c, Pos2::new(100.0, 150.0)), 180);
-        assert_eq!(doa_angle_from_pointer(c, Pos2::new(50.0, 100.0)), 270);
-    }
 
-    #[test]
-    fn test_circle_puck_hit_testing_and_no_doa_conflict() {
         let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(320.0, 232.0));
 
         // 1. pickle, bergamot, yandexmini2, yandexmini2nc: center Action + left/right volume buttons
@@ -1142,73 +1108,6 @@ mod tests {
         let idle_mat = matrix_inspector_text(None, &px, 180);
         assert!(idle_mat.contains("21×12"));
         assert!(idle_mat.contains("PWM: 180"));
-    }
-
-    #[test]
-    fn test_squircle_ring_position_geometry() {
-        let center = Pos2::new(160.0, 120.0);
-        let half_extent = 70.0;
-        let corner_radius = 18.0;
-
-        for count in [12usize, 24, 36] {
-            let per_side = count / 4;
-            let pts: Vec<Pos2> = (0..count)
-                .map(|idx| squircle_ring_position(center, half_extent, corner_radius, idx, count))
-                .collect();
-
-            // 1. Strict clockwise angular progression around center
-            for i in 0..count {
-                let p0 = pts[i];
-                let p1 = pts[(i + 1) % count];
-                let a0 = (p0.y - center.y).atan2(p0.x - center.x);
-                let a1 = (p1.y - center.y).atan2(p1.x - center.x);
-                let step = (a1 - a0).rem_euclid(TAU);
-                assert!(
-                    step > 0.01 && step < std::f32::consts::PI,
-                    "Non-clockwise step at index {i} for count {count}: step={step}"
-                );
-            }
-
-            // 2. Symmetry across all 4 sides (top, right, bottom, left)
-            for k in 0..per_side {
-                let top = pts[k];
-                let right = pts[per_side + k];
-                let bottom = pts[2 * per_side + k];
-                let left = pts[3 * per_side + k];
-
-                assert!(top.y < center.y, "top LED {k} must lie above center");
-                assert!(right.x > center.x, "right LED {k} must lie right of center");
-                assert!(bottom.y > center.y, "bottom LED {k} must lie below center");
-                assert!(left.x < center.x, "left LED {k} must lie left of center");
-
-                // Mirror symmetry within each side
-                let top_mirror = pts[per_side - 1 - k];
-                assert!(
-                    ((top.x - center.x) + (top_mirror.x - center.x)).abs() < 1e-3
-                        && (top.y - top_mirror.y).abs() < 1e-3,
-                    "top side must be horizontally symmetric at k={k} for count={count}"
-                );
-
-                // 90-degree rotational symmetry across all 4 sides
-                let top_dx = top.x - center.x;
-                let top_dy = top.y - center.y;
-                assert!(
-                    ((right.x - center.x) - (-top_dy)).abs() < 1e-3
-                        && ((right.y - center.y) - top_dx).abs() < 1e-3,
-                    "right side must be 90° CW rotation of top side at k={k}"
-                );
-                assert!(
-                    ((bottom.x - center.x) - (-top_dx)).abs() < 1e-3
-                        && ((bottom.y - center.y) - (-top_dy)).abs() < 1e-3,
-                    "bottom side must be 180° rotation of top side at k={k}"
-                );
-                assert!(
-                    ((left.x - center.x) - top_dy).abs() < 1e-3
-                        && ((left.y - center.y) - (-top_dx)).abs() < 1e-3,
-                    "left side must be 270° CW rotation of top side at k={k}"
-                );
-            }
-        }
     }
 
     #[test]

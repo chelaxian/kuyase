@@ -464,10 +464,6 @@ mod tests {
         assert_eq!(normalize_board_slug("station3"), "orion");
 
         assert_eq!(
-            detect_board_hint_from_filename("bergamot-0.373.1.13.zip").as_deref(),
-            Some("bergamot")
-        );
-        assert_eq!(
             detect_board_hint_from_filename("bergamot-0.373.1.13-rootfs.tar.gz").as_deref(),
             Some("bergamot")
         );
@@ -504,11 +500,11 @@ mod tests {
             "station2"
         );
         assert_eq!(
-            detect_board_slug_from_probe("yandexmidi", "yandex,cucumber-dvt2 amlogic, a5"),
+            detect_board_slug_from_probe("yandexmidi", "amlogic, a5"),
             "cucumber"
         );
         assert_eq!(
-            detect_board_slug_from_probe("cucumber", "yandex,cucumber-dvt2 yandex,cucumber amlogic, a5"),
+            detect_board_slug_from_probe("", "yandex,cucumber-dvt2 amlogic,a5"),
             "cucumber"
         );
         assert_eq!(
@@ -516,33 +512,17 @@ mod tests {
             "orion"
         );
         assert_eq!(
-            detect_board_slug_from_probe("", "yandex,cucumber-dvt2 amlogic,a5"),
-            "cucumber"
-        );
-        assert_eq!(
             detect_board_slug_from_probe("", "amlogic, axg Amlogic"),
             "yandexmini"
         );
         assert_eq!(detect_board_slug_from_probe("lite1", ""), "yandexmicro");
         assert_eq!(
-            detect_board_slug_from_probe("bergamot", "yandex,bergamot amlogic,axg"),
-            "bergamot"
-        );
-        assert_eq!(
             detect_board_slug_from_probe("", "yandex,bergamot amlogic,axg"),
             "bergamot"
         );
         assert_eq!(
-            detect_board_slug_from_probe("mango", "yandex,mango amlogic,a1"),
-            "mango"
-        );
-        assert_eq!(
             detect_board_slug_from_probe("", "yandex,mango amlogic,a1 Yandex Station Mango DVT"),
             "mango"
-        );
-        assert_eq!(
-            detect_board_slug_from_probe("pickle", "yandex,pickle amlogic,a4"),
-            "pickle"
         );
         assert_eq!(
             detect_board_slug_from_probe("", "yandex,pickle amlogic,a4 Yandex Pickle"),

@@ -312,12 +312,11 @@ pub enum StubAppletKind {
     QuasarLauncher2,
     IdleDaemon(String),
     DbusStub,
-    PrepareRuntimeEnv,
 }
 
 /// Classifies `argv` to determine whether `qemu-hw-bridge` was invoked as a `Stub Mode`
-/// lifecycle applet (`quasar_launcher2`, `maind`, or `begemot`), `Full Mode` D-Bus service
-/// helper (`--dbus-stub`), or early init helper (`--prepare-runtime-env`).
+/// lifecycle applet (`quasar_launcher2`, `maind`, or `begemot`) or `Full Mode` D-Bus service
+/// helper (`--dbus-stub`).
 pub fn classify_stub_applet_args(args: &[String]) -> Option<StubAppletKind> {
     let arg0 = args.first().map(|s| s.as_str()).unwrap_or("");
     let arg0_base = Path::new(arg0)
@@ -326,9 +325,6 @@ pub fn classify_stub_applet_args(args: &[String]) -> Option<StubAppletKind> {
         .unwrap_or(arg0);
     let arg1 = args.get(1).map(|s| s.as_str()).unwrap_or("");
 
-    if arg1 == "--prepare-runtime-env" {
-        return Some(StubAppletKind::PrepareRuntimeEnv);
-    }
     if arg1 == "--dbus-stub" {
         return Some(StubAppletKind::DbusStub);
     }
@@ -348,9 +344,9 @@ pub fn classify_stub_applet_args(args: &[String]) -> Option<StubAppletKind> {
     None
 }
 
-/// Dispatches `quasar_launcher2`, `maind`/`begemot` idle stubs, `--dbus-stub`, or
-/// `--prepare-runtime-env` when `qemu-hw-bridge` is invoked via bind-mount, `/tmp/.kuyase-stubs/*`,
-/// or `/quasar-qemu-init.sh`. Returns `true` if handled.
+/// Dispatches `quasar_launcher2`, `maind`/`begemot` idle stubs, or `--dbus-stub`
+/// when `qemu-hw-bridge` is invoked via bind-mount or `/tmp/.kuyase-stubs/*`.
+/// Returns `true` if handled.
 pub fn maybe_run_stub_applet() -> bool {
     let args: Vec<String> = env::args().collect();
     match classify_stub_applet_args(&args) {
@@ -365,14 +361,6 @@ pub fn maybe_run_stub_applet() -> bool {
             setup_stub_signals(false);
             detach_stdio_and_extra_fds();
             crate::dbus_stub::run_dbus_stub_applet();
-        }
-        Some(StubAppletKind::PrepareRuntimeEnv) => {
-            let profile = crate::state::BoardProfile::detect();
-            let full_mode = fs::read_to_string("/proc/cmdline")
-                .map(|c| c.split_whitespace().any(|t| t == "quasar.mode=full"))
-                .unwrap_or(false);
-            prepare_runtime_environment(&profile.board_slug, full_mode);
-            true
         }
         None => false,
     }
@@ -1119,13 +1107,6 @@ mod tests {
                 "--dbus-stub".to_string()
             ]),
             Some(StubAppletKind::DbusStub)
-        );
-        assert_eq!(
-            classify_stub_applet_args(&[
-                "/usr/local/bin/qemu-hw-bridge".to_string(),
-                "--prepare-runtime-env".to_string()
-            ]),
-            Some(StubAppletKind::PrepareRuntimeEnv)
         );
         assert_eq!(
             classify_stub_applet_args(&["/usr/local/bin/qemu-hw-bridge".to_string()]),

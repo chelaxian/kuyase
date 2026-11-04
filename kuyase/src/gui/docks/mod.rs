@@ -5,7 +5,6 @@ pub mod voice_audio;
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Margin, Pos2, RichText, Stroke, Vec2};
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 
 pub const HIJACK_WINDOW_MS: u64 = 1680;
 
@@ -22,14 +21,6 @@ pub const LED_PATTERNS: &[(&str, &str)] = &[
     ("notification_available", "notification_available.led"),
     ("rgb:#00E5FF", "Сплошной Бирюзовый (rgb:#00E5FF)"),
 ];
-
-pub fn compute_hijack_window_remaining_ms(last_inject_at: Option<Instant>, now: Instant) -> u64 {
-    let Some(start) = last_inject_at else {
-        return 0;
-    };
-    let elapsed_ms = now.saturating_duration_since(start).as_millis() as u64;
-    HIJACK_WINDOW_MS.saturating_sub(elapsed_ms)
-}
 
 pub(crate) fn gnome_preferences_group(
     ui: &mut egui::Ui,
@@ -208,24 +199,5 @@ pub(crate) fn render_mini_oscilloscope(ui: &mut egui::Ui, app: &GuiAppState) {
             ],
             Stroke::new(1.2, Color32::from_rgb(55, 110, 100)),
         );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
-
-    #[test]
-    fn test_hijack_window_countdown_calculation() {
-        let now = Instant::now();
-        assert_eq!(compute_hijack_window_remaining_ms(None, now), 0);
-        assert_eq!(compute_hijack_window_remaining_ms(Some(now), now), 1680);
-
-        let after_500 = now + Duration::from_millis(500);
-        assert_eq!(compute_hijack_window_remaining_ms(Some(now), after_500), 1180);
-
-        let after_1680 = now + Duration::from_millis(1680);
-        assert_eq!(compute_hijack_window_remaining_ms(Some(now), after_1680), 0);
     }
 }

@@ -254,6 +254,15 @@ impl GuiAppState {
             .collect()
     }
 
+    pub fn active_board_slug(&self) -> String {
+        self.latest_state
+            .as_ref()
+            .map(|s| s.board_slug.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&self.config.selected_board)
+            .to_string()
+    }
+
     pub fn record_state_transition(
         &mut self,
         prev_opt: Option<&BridgeStateSnapshot>,

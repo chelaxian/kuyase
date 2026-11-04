@@ -1,7 +1,4 @@
-use super::{
-    compute_hijack_window_remaining_ms, gnome_action_row, gnome_preferences_group,
-    render_mini_oscilloscope,
-};
+use super::{gnome_action_row, gnome_preferences_group, render_mini_oscilloscope, HIJACK_WINDOW_MS};
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, RichText};
 use protocol::HostCommand;
@@ -117,11 +114,7 @@ pub fn render_tts_audio_voice_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
                         }
                     }
                     if ui.button("Сохранить .WAV").clicked() {
-                        let board = app
-                            .latest_state
-                            .as_ref()
-                            .map(|s| s.board_slug.clone())
-                            .unwrap_or_else(|| app.config.selected_board.clone());
+                        let board = app.active_board_slug();
                         if app.audio_player.captured_bytes_len() == 0 {
                             if let Some(ref b) = app.bridge {
                                 let fallback = b.captured_pcm_bytes();
@@ -150,8 +143,13 @@ pub fn render_tts_audio_voice_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
                 },
             );
 
-            let rem_ms =
-                compute_hijack_window_remaining_ms(app.last_voice_inject_at, Instant::now());
+            let rem_ms = app
+                .last_voice_inject_at
+                .map(|start| {
+                    let elapsed = Instant::now().saturating_duration_since(start).as_millis() as u64;
+                    HIJACK_WINDOW_MS.saturating_sub(elapsed)
+                })
+                .unwrap_or(0);
             if rem_ms > 0 {
                 ui.ctx().request_repaint_after(Duration::from_millis(16));
             }
@@ -185,7 +183,6 @@ pub fn render_tts_audio_voice_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
                     )
                     .fill(Color32::from_rgb(53, 132, 228));
                     if ui.add(send_btn).clicked() {
-                        app.last_voice_inject_at = Some(Instant::now());
                         let cmd = HostCommand::InjectVoice {
                             phrase: app.voice_phrase.clone(),
                             doa_angle: Some(app.doa_slider),

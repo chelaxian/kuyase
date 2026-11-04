@@ -1,11 +1,11 @@
 use crate::gui::canvas::{draw_circular_oknix_logo, draw_ring_led};
 use crate::gui::display_geom::{
-    build_local_segments_from_text, clock_inspector_text, clock_segment_lines,
-    clock_special_positions, hit_test_clock_segment, hit_test_matrix_pixel, mango_battery_led_rgb,
-    matrix_inspector_text, render_text_to_matrix_21x12, segment_brightness,
+    clock_inspector_text, clock_segment_lines, clock_special_positions, hit_test_clock_segment,
+    hit_test_matrix_pixel, mango_battery_led_rgb, matrix_inspector_text,
 };
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use protocol::display::{build_segments_map_from_text, render_text_to_matrix_21x12};
 use protocol::{BridgeStateSnapshot, HostCommand};
 use std::collections::BTreeMap;
 
@@ -28,23 +28,23 @@ fn pointer_draw_erase_mode(ui: &egui::Ui, resp: &egui::Response) -> Option<(Pos2
 }
 
 fn apply_clock_text(app: &mut GuiAppState, text: &str) {
-    let br = if text.is_empty() {
+    let (br, built) = if text.is_empty() {
         app.clock_active_mask.clear();
-        0
+        (0, BTreeMap::new())
     } else {
         if app.clock_brightness == 0 {
             app.clock_brightness = 255;
         }
-        let built = build_local_segments_from_text(text, 255);
+        let built = build_segments_map_from_text(text, app.clock_brightness);
         app.clock_active_mask = built
-            .into_iter()
-            .filter(|(_, v)| *v > 0)
-            .map(|(k, _)| (k, true))
+            .iter()
+            .filter(|(_, &v)| v > 0)
+            .map(|(k, _)| (k.clone(), true))
             .collect();
-        app.clock_brightness
+        (app.clock_brightness, built)
     };
     if let Some(ref mut latest) = app.latest_state {
-        latest.clock_segments = build_local_segments_from_text(text, br);
+        latest.clock_segments = built;
     }
     app.send_command(HostCommand::SetClockDisplay {
         segments: None,
@@ -66,9 +66,9 @@ fn apply_matrix_text(app: &mut GuiAppState, text: &str) {
         if app.clock_brightness == 0 {
             app.clock_brightness = 255;
         }
-        let mask_px = render_text_to_matrix_21x12(text, 255);
-        app.matrix_active_mask = mask_px.iter().map(|&v| v > 0).collect();
-        app.matrix_custom_pixels = render_text_to_matrix_21x12(text, app.clock_brightness);
+        let px = render_text_to_matrix_21x12(text, app.clock_brightness);
+        app.matrix_active_mask = px.iter().map(|&v| v > 0).collect();
+        app.matrix_custom_pixels = px;
         app.clock_brightness
     };
     if let Some(ref mut latest) = app.latest_state {
@@ -160,7 +160,7 @@ fn draw_segment_clock(
     };
 
     for (name, p0, p1) in clock_segment_lines(rect) {
-        let br = segment_brightness(segments, &name);
+        let br = segments.get(&name).copied().unwrap_or(0);
         let is_hovered = hovered_seg == Some(name.as_str());
         if is_hovered {
             painter.line_segment(
@@ -178,21 +178,21 @@ fn draw_segment_clock(
 
     let (p3_pos, q3_pos, deg_pos) = clock_special_positions(rect);
 
-    let p3 = segment_brightness(segments, "p3");
+    let p3 = segments.get("p3").copied().unwrap_or(0);
     let p3_hov = hovered_seg == Some("p3");
     if p3_hov {
         painter.circle_stroke(p3_pos, 5.0, Stroke::new(1.4, Color32::from_rgb(95, 195, 255)));
     }
     painter.circle_filled(p3_pos, 2.8, seg_color(p3, p3_hov));
 
-    let q3 = segment_brightness(segments, "q3");
+    let q3 = segments.get("q3").copied().unwrap_or(0);
     let q3_hov = hovered_seg == Some("q3");
     if q3_hov {
         painter.circle_stroke(q3_pos, 5.0, Stroke::new(1.4, Color32::from_rgb(95, 195, 255)));
     }
     painter.circle_filled(q3_pos, 2.8, seg_color(q3, q3_hov));
 
-    let deg_br = segment_brightness(segments, "deg");
+    let deg_br = segments.get("deg").copied().unwrap_or(0);
     let deg_hov = hovered_seg == Some("deg");
     if deg_hov {
         painter.circle_stroke(deg_pos, 6.2, Stroke::new(1.4, Color32::from_rgb(95, 195, 255)));
@@ -278,7 +278,7 @@ pub fn render_segment_clock_faceplate(
     if let Some((ptr, draw_mode)) = pointer_draw_erase_mode(ui, &cresp) {
         if let Some(seg_key) = hit_test_clock_segment(crect, ptr) {
             let is_on = app.clock_active_mask.get(&seg_key).copied().unwrap_or(false)
-                && segment_brightness(&active_segs, &seg_key) > 0;
+                && active_segs.get(&seg_key).copied().unwrap_or(0) > 0;
             if draw_mode != is_on {
                 let next_val = if draw_mode {
                     if app.clock_brightness == 0 {
