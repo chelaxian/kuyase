@@ -71,8 +71,13 @@ pub fn circle_enclosure_layout(board_slug: &str, rect: Rect) -> CircleEnclosureL
     let min_dim = rect.height().min(rect.width());
     let outer_r = (min_dim * 0.36).clamp(64.0, 92.0);
     let inner_cap_r = outer_r * 0.72;
-    let doa_r = outer_r + 14.0;
-    let ring_r = match circle_puck_subtype(board_slug) {
+    let norm = protocol::normalize_board_slug(board_slug);
+    let doa_r = if norm == "orion" {
+        outer_r + 16.0
+    } else {
+        outer_r + 14.0
+    };
+    let ring_r = match circle_puck_subtype(&norm) {
         CirclePuckSubtype::OuterRingAndCenterOknix => outer_r * 0.85,
         CirclePuckSubtype::CenterRingWithMinusPlus => (outer_r * 0.25).clamp(18.0, 24.0),
         CirclePuckSubtype::Mini1TofAndSideMute => outer_r * 0.52,
@@ -130,23 +135,36 @@ pub fn enclosure_button_targets(board_slug: &str, rect: Rect) -> Vec<(&'static s
         },
         EnclosureShape::SquircleCube => {
             if norm == "cucumber" {
-                let off_x = layout.outer_r * 0.52;
+                let body_half = layout.outer_r * 0.82;
+                let off_x = body_half * 0.56;
                 vec![
                     ("action", c, layout.action_hit_r),
                     ("volume_down", Pos2::new(c.x - off_x, c.y), layout.button_hit_r),
                     ("volume_up", Pos2::new(c.x + off_x, c.y), layout.button_hit_r),
                 ]
+            } else if norm == "orion" {
+                let cap_half = layout.outer_r * 0.66;
+                let action_pos = Pos2::new(c.x, c.y - cap_half * 0.16);
+                let bar_y = c.y + cap_half * 0.36;
+                let bar_half_w = cap_half * 0.46;
+                vec![
+                    ("action", action_pos, 15.5),
+                    ("volume_down", Pos2::new(c.x - bar_half_w, bar_y), 13.0),
+                    ("volume_up", Pos2::new(c.x + bar_half_w, bar_y), 13.0),
+                ]
             } else {
-                vec![("action", c, layout.action_hit_r)]
+                vec![("action", c, 18.0)]
             }
         }
         EnclosureShape::RectLightPanel => {
-            let off_x = layout.outer_r * 0.48;
-            let top_y = c.y - layout.outer_r * 0.62;
+            let half_w = layout.outer_r * 0.80;
+            let half_h = layout.outer_r * 0.68;
+            let off_x = half_w * 0.56;
+            let top_y = c.y - half_h * 0.68;
             vec![
-                ("action", Pos2::new(c.x, top_y), layout.button_hit_r),
-                ("volume_down", Pos2::new(c.x - off_x, top_y), layout.button_hit_r),
-                ("volume_up", Pos2::new(c.x + off_x, top_y), layout.button_hit_r),
+                ("action", Pos2::new(c.x, top_y), 13.0),
+                ("volume_down", Pos2::new(c.x - off_x, top_y), 13.0),
+                ("volume_up", Pos2::new(c.x + off_x, top_y), 13.0),
             ]
         }
         EnclosureShape::CylinderPortable => {
@@ -185,9 +203,14 @@ pub fn hit_test_enclosure_target(
         }
     }
 
-    let layout = circle_enclosure_layout(board_slug, rect);
+    let norm = protocol::normalize_board_slug(board_slug);
+    let layout = circle_enclosure_layout(&norm, rect);
     let dist = pointer.distance(layout.center);
-    if dist >= layout.outer_r * 0.88 && dist <= layout.doa_r + 14.0 {
+    let doa_min_r = match board_enclosure_shape(&norm) {
+        EnclosureShape::SquircleCube | EnclosureShape::RectLightPanel => layout.doa_r - 12.0,
+        _ => layout.outer_r * 0.88,
+    };
+    if dist >= doa_min_r && dist <= layout.doa_r + 14.0 {
         return Some(EnclosureHitTarget::DoaAzimuth(doa_angle_from_pointer(
             layout.center,
             pointer,
@@ -212,6 +235,18 @@ pub fn enclosure_inspector_text(
         Some(EnclosureHitTarget::Button("action")) => match norm.as_str() {
             "pickle" | "cucumber" => format!(
                 "Центральная кнопка Action + круговой логотип oknix (/dev/fb1, 6 LED) | ЛКМ: uinput action ({})",
+                press_mode
+            ),
+            "orion" => format!(
+                "Сенсорная кнопка Action (вызов Алисы / пауза, крышка 36 LED /dev/fb2) | ЛКМ: uinput action ({})",
+                press_mode
+            ),
+            "station2" => format!(
+                "Сенсорная кнопка Action (верхняя планка над панелью 88 LED 11×8 /dev/fb0) | ЛКМ: uinput action ({})",
+                press_mode
+            ),
+            "saturn" => format!(
+                "Центральная кнопка Action + статусный индикатор (1 LED, sysfs) | ЛКМ: uinput action ({})",
                 press_mode
             ),
             "mango" => format!(
@@ -245,14 +280,34 @@ pub fn enclosure_inspector_text(
                 )
             }
         }
-        Some(EnclosureHitTarget::Button("volume_down")) => format!(
-            "Кнопка уменьшения громкости «−» (громкость {}/10) | ЛКМ: uinput volume_down ({})",
-            st.volume_level, press_mode
-        ),
-        Some(EnclosureHitTarget::Button("volume_up")) => format!(
-            "Кнопка увеличения громкости «+» (громкость {}/10) | ЛКМ: uinput volume_up ({})",
-            st.volume_level, press_mode
-        ),
+        Some(EnclosureHitTarget::Button("volume_down")) => match norm.as_str() {
+            "orion" => format!(
+                "Сенсорная полоса громкости «−» (громкость {}/10, крышка /dev/fb2) | ЛКМ: uinput volume_down ({})",
+                st.volume_level, press_mode
+            ),
+            "station2" => format!(
+                "Сенсорная кнопка громкости «−» (громкость {}/10, панель 88 LED 11×8 /dev/fb0) | ЛКМ: uinput volume_down ({})",
+                st.volume_level, press_mode
+            ),
+            _ => format!(
+                "Кнопка уменьшения громкости «−» (громкость {}/10) | ЛКМ: uinput volume_down ({})",
+                st.volume_level, press_mode
+            ),
+        },
+        Some(EnclosureHitTarget::Button("volume_up")) => match norm.as_str() {
+            "orion" => format!(
+                "Сенсорная полоса громкости «+» (громкость {}/10, крышка /dev/fb2) | ЛКМ: uinput volume_up ({})",
+                st.volume_level, press_mode
+            ),
+            "station2" => format!(
+                "Сенсорная кнопка громкости «+» (громкость {}/10, панель 88 LED 11×8 /dev/fb0) | ЛКМ: uinput volume_up ({})",
+                st.volume_level, press_mode
+            ),
+            _ => format!(
+                "Кнопка увеличения громкости «+» (громкость {}/10) | ЛКМ: uinput volume_up ({})",
+                st.volume_level, press_mode
+            ),
+        },
         Some(EnclosureHitTarget::Button(other)) => format!(
             "Кнопка корпуса {} | ЛКМ: uinput {} ({})",
             other, other, press_mode
@@ -270,6 +325,22 @@ pub fn enclosure_inspector_text(
                 .to_string()
         }
         None => match norm.as_str() {
+            "cucumber" => format!(
+                "DOA {}° | Контур 24 LED (/dev/fb0) + oknix 6 LED (/dev/fb1) | Кнопки [−] [Action] [+]: ЛКМ ({}) | Обод: DOA",
+                st.doa_angle, press_mode
+            ),
+            "orion" => format!(
+                "DOA {}° | Кольцо 36 LED (/dev/fb2) + Ambilight 12×2 RGBW (/dev/fb0) | [Action] [− ═══ +]: ЛКМ ({}) | Обод: DOA",
+                st.doa_angle, press_mode
+            ),
+            "station2" => format!(
+                "DOA {}° | Световая панель 88 LED 11×8 (/dev/fb0) | Верхняя планка [−] [Action] [+]: ЛКМ ({}) | Обод: DOA",
+                st.doa_angle, press_mode
+            ),
+            "saturn" => format!(
+                "DOA {}° | Индикатор 1 LED (sysfs saturn:*:ring0) | Центральная кнопка [Action]: ЛКМ ({}) | Обод: DOA",
+                st.doa_angle, press_mode
+            ),
             "pickle" => format!(
                 "DOA {}° | Кольцо 16 LED (/dev/fb0) + oknix 6 LED (/dev/fb1) | Кнопки [−] [Action] [+]: ЛКМ ({}) | Обод: DOA",
                 st.doa_angle, press_mode
@@ -291,6 +362,54 @@ pub fn enclosure_inspector_text(
                 st.doa_angle, st.volume_level, press_mode
             ),
         },
+    }
+}
+
+pub fn squircle_ring_position(
+    center: Pos2,
+    half_extent: f32,
+    corner_radius: f32,
+    index: usize,
+    count: usize,
+) -> Pos2 {
+    if count == 0 {
+        return center;
+    }
+    if count == 1 {
+        return Pos2::new(center.x, center.y - half_extent);
+    }
+
+    let eff_corner = corner_radius.clamp(half_extent * 0.15, half_extent * 0.65);
+    let span = half_extent - eff_corner * 0.55;
+    let corner_inset = eff_corner * 0.12;
+    let idx = index % count;
+
+    let (side, u) = if count % 4 == 0 {
+        let per_side = count / 4;
+        let side = idx / per_side;
+        let k = idx % per_side;
+        let u = if per_side <= 1 {
+            0.0
+        } else {
+            -1.0 + 2.0 * (k as f32) / ((per_side - 1) as f32)
+        };
+        (side, u)
+    } else {
+        let t = (idx as f32 + 0.5) / (count as f32);
+        let side_f = t * 4.0;
+        let side = (side_f.floor() as usize).min(3);
+        let frac = side_f - (side as f32);
+        (side, frac * 2.0 - 1.0)
+    };
+
+    let along = u * span;
+    let perp = half_extent - corner_inset * u * u;
+
+    match side {
+        0 => Pos2::new(center.x + along, center.y - perp),
+        1 => Pos2::new(center.x + perp, center.y + along),
+        2 => Pos2::new(center.x - along, center.y + perp),
+        _ => Pos2::new(center.x - perp, center.y - along),
     }
 }
 
@@ -797,5 +916,157 @@ mod tests {
         let idle_mat = matrix_inspector_text(None, &px, 180);
         assert!(idle_mat.contains("21×12"));
         assert!(idle_mat.contains("PWM: 180"));
+    }
+
+    #[test]
+    fn test_squircle_ring_position_geometry() {
+        let center = Pos2::new(160.0, 120.0);
+        let half_extent = 70.0;
+        let corner_radius = 18.0;
+
+        for count in [12usize, 24, 36] {
+            let per_side = count / 4;
+            let pts: Vec<Pos2> = (0..count)
+                .map(|idx| squircle_ring_position(center, half_extent, corner_radius, idx, count))
+                .collect();
+
+            // 1. Strict clockwise angular progression around center
+            for i in 0..count {
+                let p0 = pts[i];
+                let p1 = pts[(i + 1) % count];
+                let a0 = (p0.y - center.y).atan2(p0.x - center.x);
+                let a1 = (p1.y - center.y).atan2(p1.x - center.x);
+                let step = (a1 - a0).rem_euclid(TAU);
+                assert!(
+                    step > 0.01 && step < std::f32::consts::PI,
+                    "Non-clockwise step at index {i} for count {count}: step={step}"
+                );
+            }
+
+            // 2. Symmetry across all 4 sides (top, right, bottom, left)
+            for k in 0..per_side {
+                let top = pts[k];
+                let right = pts[per_side + k];
+                let bottom = pts[2 * per_side + k];
+                let left = pts[3 * per_side + k];
+
+                assert!(top.y < center.y, "top LED {k} must lie above center");
+                assert!(right.x > center.x, "right LED {k} must lie right of center");
+                assert!(bottom.y > center.y, "bottom LED {k} must lie below center");
+                assert!(left.x < center.x, "left LED {k} must lie left of center");
+
+                // Mirror symmetry within each side
+                let top_mirror = pts[per_side - 1 - k];
+                assert!(
+                    ((top.x - center.x) + (top_mirror.x - center.x)).abs() < 1e-3
+                        && (top.y - top_mirror.y).abs() < 1e-3,
+                    "top side must be horizontally symmetric at k={k} for count={count}"
+                );
+
+                // 90-degree rotational symmetry across all 4 sides
+                let top_dx = top.x - center.x;
+                let top_dy = top.y - center.y;
+                assert!(
+                    ((right.x - center.x) - (-top_dy)).abs() < 1e-3
+                        && ((right.y - center.y) - top_dx).abs() < 1e-3,
+                    "right side must be 90° CW rotation of top side at k={k}"
+                );
+                assert!(
+                    ((bottom.x - center.x) - (-top_dx)).abs() < 1e-3
+                        && ((bottom.y - center.y) - (-top_dy)).abs() < 1e-3,
+                    "bottom side must be 180° rotation of top side at k={k}"
+                );
+                assert!(
+                    ((left.x - center.x) - top_dy).abs() < 1e-3
+                        && ((left.y - center.y) - (-top_dx)).abs() < 1e-3,
+                    "left side must be 270° CW rotation of top side at k={k}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_squircle_and_rect_panel_hit_testing() {
+        let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(320.0, 252.0));
+
+        // 1. cucumber, orion, station2: action, volume_down, volume_up + outer DOA compass ring
+        for slug in ["cucumber", "orion", "station2"] {
+            let layout = circle_enclosure_layout(slug, rect);
+            for btn in ["action", "volume_down", "volume_up"] {
+                let bpos = enclosure_button_pos(slug, rect, btn)
+                    .unwrap_or_else(|| panic!("missing button {btn} on {slug}"));
+                assert_eq!(
+                    hit_test_enclosure_target(slug, rect, bpos),
+                    Some(EnclosureHitTarget::Button(btn)),
+                    "button {btn} should hit on {slug}"
+                );
+            }
+
+            for (cardinal_pos, expected_deg) in [
+                (Pos2::new(layout.center.x, layout.center.y - layout.doa_r), 0),
+                (Pos2::new(layout.center.x + layout.doa_r, layout.center.y), 90),
+                (Pos2::new(layout.center.x, layout.center.y + layout.doa_r), 180),
+                (Pos2::new(layout.center.x - layout.doa_r, layout.center.y), 270),
+            ] {
+                assert_eq!(
+                    hit_test_enclosure_target(slug, rect, cardinal_pos),
+                    Some(EnclosureHitTarget::DoaAzimuth(expected_deg)),
+                    "DOA at {expected_deg}° should hit on {slug}"
+                );
+            }
+        }
+
+        // 2. saturn: central action button + outer DOA compass ring (no volume buttons on cap)
+        {
+            let slug = "saturn";
+            let layout = circle_enclosure_layout(slug, rect);
+            let action_pos = enclosure_button_pos(slug, rect, "action").unwrap();
+            assert_eq!(
+                hit_test_enclosure_target(slug, rect, action_pos),
+                Some(EnclosureHitTarget::Button("action"))
+            );
+            assert!(enclosure_button_pos(slug, rect, "volume_down").is_none());
+            assert!(enclosure_button_pos(slug, rect, "volume_up").is_none());
+            assert_eq!(
+                hit_test_enclosure_target(
+                    slug,
+                    rect,
+                    Pos2::new(layout.center.x, layout.center.y - layout.doa_r)
+                ),
+                Some(EnclosureHitTarget::DoaAzimuth(0))
+            );
+        }
+
+        // 3. Inspector text verification for cucumber, orion, station2, saturn
+        let mut st = BridgeStateSnapshot::default();
+        st.doa_angle = 45;
+        st.volume_level = 7;
+
+        let cuc_rest = enclosure_inspector_text("cucumber", &st, None, "single");
+        assert!(cuc_rest.contains("24 LED") && cuc_rest.contains("oknix 6 LED"));
+
+        let ori_rest = enclosure_inspector_text("orion", &st, None, "single");
+        assert!(
+            ori_rest.contains("36 LED")
+                && ori_rest.contains("/dev/fb2")
+                && ori_rest.contains("Ambilight 12×2 RGBW")
+                && ori_rest.contains("/dev/fb0")
+        );
+
+        let st2_rest = enclosure_inspector_text("station2", &st, None, "single");
+        assert!(st2_rest.contains("88 LED 11×8") && st2_rest.contains("/dev/fb0"));
+
+        let sat_rest = enclosure_inspector_text("saturn", &st, None, "single");
+        assert!(sat_rest.contains("1 LED") && sat_rest.contains("saturn"));
+
+        for slug in ["cucumber", "orion", "station2", "saturn"] {
+            let hov_act = enclosure_inspector_text(
+                slug,
+                &st,
+                Some(EnclosureHitTarget::Button("action")),
+                "long",
+            );
+            assert!(hov_act.contains("uinput action (long)"));
+        }
     }
 }

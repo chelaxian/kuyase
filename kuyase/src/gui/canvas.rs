@@ -4,8 +4,8 @@ pub use crate::gui::display_geom::{
     clock_segment_lines, default_board_ring_leds, doa_angle_from_pointer, enclosure_button_pos,
     enclosure_button_targets, enclosure_inspector_text, hit_test_clock_segment,
     hit_test_enclosure_target, hit_test_matrix_pixel, led_ring_position,
-    render_text_to_matrix_21x12, segment_brightness, CircleEnclosureLayout, CirclePuckSubtype,
-    EnclosureHitTarget, EnclosureShape,
+    render_text_to_matrix_21x12, segment_brightness, squircle_ring_position, CircleEnclosureLayout,
+    CirclePuckSubtype, EnclosureHitTarget, EnclosureShape,
 };
 use crate::gui::faceplates::{
     render_aux_logo_strip, render_matrix_21x12_faceplate, render_segment_clock_faceplate,
@@ -444,6 +444,350 @@ fn render_circle_puck_enclosure(
     }
 }
 
+fn render_squircle_cube_enclosure(
+    painter: &egui::Painter,
+    board_slug: &str,
+    rect: egui::Rect,
+    st: &BridgeStateSnapshot,
+    hovered_target: Option<EnclosureHitTarget>,
+) {
+    let norm = protocol::normalize_board_slug(board_slug);
+    let layout = circle_enclosure_layout(&norm, rect);
+    let center = layout.center;
+    let outer_r = layout.outer_r;
+    let is_btn_hovered =
+        |name: &'static str| hovered_target == Some(EnclosureHitTarget::Button(name));
+
+    let compass_inner_r = if norm == "orion" {
+        outer_r + 4.0
+    } else {
+        outer_r
+    };
+    draw_doa_compass_ring(
+        painter,
+        center,
+        compass_inner_r,
+        layout.doa_r,
+        st.doa_angle,
+        matches!(hovered_target, Some(EnclosureHitTarget::DoaAzimuth(_))),
+    );
+
+    match norm.as_str() {
+        "orion" => {
+            // 1. Внешний скруглённый квадрат: 12 зон Ambilight (/dev/fb0, по 3 на сторону)
+            let ambi_half = outer_r * 0.86;
+            let ambi_corner_r = ambi_half * 0.30;
+            let ambi_rect = egui::Rect::from_center_size(center, Vec2::splat(ambi_half * 2.0));
+            painter.rect_filled(ambi_rect, ambi_corner_r, Color32::from_rgb(20, 24, 32));
+            painter.rect_stroke(
+                ambi_rect,
+                ambi_corner_r,
+                Stroke::new(1.8, Color32::from_rgb(58, 66, 82)),
+            );
+
+            for idx in 0..12 {
+                let rgb = st.logo_pixels.get(idx).copied().unwrap_or([110, 45, 220]);
+                let pos = squircle_ring_position(
+                    center,
+                    ambi_half * 0.90,
+                    ambi_corner_r * 0.90,
+                    idx,
+                    12,
+                );
+                draw_ring_led(painter, pos, 4.6, rgb);
+            }
+
+            // 2. Внутренний скруглённый квадрат (крышка): 36 LED Ring (/dev/fb2, по 9 на сторону)
+            let cap_half = outer_r * 0.66;
+            let cap_corner_r = cap_half * 0.28;
+            let cap_rect = egui::Rect::from_center_size(center, Vec2::splat(cap_half * 2.0));
+            painter.rect_filled(cap_rect, cap_corner_r, Color32::from_rgb(15, 18, 24));
+            painter.rect_stroke(
+                cap_rect,
+                cap_corner_r,
+                Stroke::new(1.5, Color32::from_rgb(68, 76, 92)),
+            );
+
+            let inner_pad = egui::Rect::from_center_size(center, Vec2::splat(cap_half * 1.48));
+            painter.rect_filled(
+                inner_pad,
+                cap_corner_r * 0.72,
+                Color32::from_rgb(12, 15, 20),
+            );
+
+            let ring_count = st.ring_leds.max(st.ring_pixels.len()).max(36);
+            for idx in 0..ring_count {
+                let rgb = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
+                let pos = squircle_ring_position(
+                    center,
+                    cap_half * 0.87,
+                    cap_corner_r * 0.85,
+                    idx,
+                    ring_count,
+                );
+                draw_ring_led(painter, pos, 3.2, rgb);
+            }
+
+            // 3. Внутри крышки: центральная кнопка Action и горизонтальная сенсорная полоса [ − ═══════ + ]
+            if let Some(action_pos) = enclosure_button_pos(&norm, rect, "action") {
+                draw_cap_touch_button(
+                    painter,
+                    action_pos,
+                    "action",
+                    is_btn_hovered("action"),
+                    st.mics_muted,
+                );
+            }
+
+            if let (Some(minus_pos), Some(plus_pos)) = (
+                enclosure_button_pos(&norm, rect, "volume_down"),
+                enclosure_button_pos(&norm, rect, "volume_up"),
+            ) {
+                let bar_rect = egui::Rect::from_center_size(
+                    Pos2::new(center.x, minus_pos.y),
+                    Vec2::new((plus_pos.x - minus_pos.x) + 24.0, 22.0),
+                );
+                painter.rect_filled(bar_rect, 11.0, Color32::from_rgb(18, 22, 30));
+                painter.rect_stroke(
+                    bar_rect,
+                    11.0,
+                    Stroke::new(1.0, Color32::from_rgb(48, 56, 72)),
+                );
+
+                let track_x0 = minus_pos.x + 12.5;
+                let track_x1 = plus_pos.x - 12.5;
+                if track_x1 > track_x0 {
+                    painter.line_segment(
+                        [
+                            Pos2::new(track_x0, minus_pos.y),
+                            Pos2::new(track_x1, minus_pos.y),
+                        ],
+                        Stroke::new(2.2, Color32::from_rgb(44, 52, 68)),
+                    );
+                    let vol_frac = (st.volume_level.clamp(0, 10) as f32) / 10.0;
+                    let fill_x = track_x0 + (track_x1 - track_x0) * vol_frac;
+                    painter.line_segment(
+                        [
+                            Pos2::new(track_x0, minus_pos.y),
+                            Pos2::new(fill_x, minus_pos.y),
+                        ],
+                        Stroke::new(2.6, Color32::from_rgb(0, 195, 240)),
+                    );
+                }
+
+                draw_cap_touch_button(
+                    painter,
+                    minus_pos,
+                    "volume_down",
+                    is_btn_hovered("volume_down"),
+                    st.mics_muted,
+                );
+                draw_cap_touch_button(
+                    painter,
+                    plus_pos,
+                    "volume_up",
+                    is_btn_hovered("volume_up"),
+                    st.mics_muted,
+                );
+            }
+        }
+        "cucumber" => {
+            // Станция Миди (cucumber): скруглённый квадрат 24 LED (по 6 на сторону) + центральный 6-LED oknix между − и +
+            let body_half = outer_r * 0.82;
+            let corner_r = body_half * 0.28;
+            let body_rect = egui::Rect::from_center_size(center, Vec2::splat(body_half * 2.0));
+            painter.rect_filled(body_rect, corner_r, Color32::from_rgb(24, 28, 36));
+            painter.rect_stroke(
+                body_rect,
+                corner_r,
+                Stroke::new(2.0, Color32::from_rgb(66, 74, 90)),
+            );
+
+            let inner_cap = egui::Rect::from_center_size(center, Vec2::splat(body_half * 1.44));
+            painter.rect_filled(inner_cap, corner_r * 0.72, Color32::from_rgb(16, 19, 25));
+
+            let ring_count = st.ring_leds.max(st.ring_pixels.len()).max(24);
+            for idx in 0..ring_count {
+                let rgb = st.ring_pixels.get(idx).copied().unwrap_or([0, 165, 210]);
+                let pos = squircle_ring_position(
+                    center,
+                    body_half * 0.86,
+                    corner_r * 0.85,
+                    idx,
+                    ring_count,
+                );
+                draw_ring_led(painter, pos, 4.0, rgb);
+            }
+
+            if let Some(minus_pos) = enclosure_button_pos(&norm, rect, "volume_down") {
+                draw_cap_touch_button(
+                    painter,
+                    minus_pos,
+                    "volume_down",
+                    is_btn_hovered("volume_down"),
+                    st.mics_muted,
+                );
+            }
+            if let Some(plus_pos) = enclosure_button_pos(&norm, rect, "volume_up") {
+                draw_cap_touch_button(
+                    painter,
+                    plus_pos,
+                    "volume_up",
+                    is_btn_hovered("volume_up"),
+                    st.mics_muted,
+                );
+            }
+
+            let logo_count = if !st.logo_pixels.is_empty() {
+                st.logo_pixels.len()
+            } else {
+                6
+            };
+            draw_circular_oknix_logo(
+                painter,
+                center,
+                layout.center_logo_r,
+                4.0,
+                &st.logo_pixels,
+                logo_count,
+                [135, 35, 255],
+            );
+            if is_btn_hovered("action") {
+                painter.circle_stroke(
+                    center,
+                    layout.center_logo_r + 8.5,
+                    Stroke::new(1.5, Color32::from_rgb(110, 195, 255)),
+                );
+            }
+        }
+        _ => {
+            // Яндекс Хаб (saturn): компактный скруглённый квадрат с 1 статусным светодиодом и центральной кнопкой Action
+            let body_half = outer_r * 0.68;
+            let corner_r = body_half * 0.30;
+            let body_rect = egui::Rect::from_center_size(center, Vec2::splat(body_half * 2.0));
+            painter.rect_filled(body_rect, corner_r, Color32::from_rgb(26, 30, 38));
+            painter.rect_stroke(
+                body_rect,
+                corner_r,
+                Stroke::new(2.0, Color32::from_rgb(70, 78, 94)),
+            );
+
+            let inner_cap = egui::Rect::from_center_size(center, Vec2::splat(body_half * 1.44));
+            painter.rect_filled(inner_cap, corner_r * 0.72, Color32::from_rgb(17, 20, 27));
+
+            let led_pos = Pos2::new(center.x, center.y - body_half * 0.54);
+            let rgb = st.ring_pixels.first().copied().unwrap_or([0, 210, 145]);
+            draw_ring_led(painter, led_pos, 5.2, rgb);
+
+            draw_cap_touch_button(
+                painter,
+                center,
+                "action",
+                is_btn_hovered("action"),
+                st.mics_muted,
+            );
+            painter.text(
+                Pos2::new(center.x, center.y + body_half * 0.46),
+                egui::Align2::CENTER_CENTER,
+                "HUB",
+                egui::FontId::monospace(9.5),
+                Color32::from_rgb(125, 138, 158),
+            );
+        }
+    }
+}
+
+fn render_rect_light_panel_enclosure(
+    painter: &egui::Painter,
+    board_slug: &str,
+    rect: egui::Rect,
+    st: &BridgeStateSnapshot,
+    hovered_target: Option<EnclosureHitTarget>,
+) {
+    let norm = protocol::normalize_board_slug(board_slug);
+    let layout = circle_enclosure_layout(&norm, rect);
+    let center = layout.center;
+    let outer_r = layout.outer_r;
+    let is_btn_hovered =
+        |name: &'static str| hovered_target == Some(EnclosureHitTarget::Button(name));
+
+    draw_doa_compass_ring(
+        painter,
+        center,
+        outer_r,
+        layout.doa_r,
+        st.doa_angle,
+        matches!(hovered_target, Some(EnclosureHitTarget::DoaAzimuth(_))),
+    );
+
+    let half_w = outer_r * 0.80;
+    let half_h = outer_r * 0.68;
+    let corner_r = outer_r * 0.18;
+    let body_rect = egui::Rect::from_center_size(center, Vec2::new(half_w * 2.0, half_h * 2.0));
+    painter.rect_filled(body_rect, corner_r, Color32::from_rgb(22, 26, 34));
+    painter.rect_stroke(
+        body_rect,
+        corner_r,
+        Stroke::new(2.0, Color32::from_rgb(66, 74, 90)),
+    );
+
+    // Верхняя сенсорная планка [ − ] [ Action ] [ + ]
+    let top_y = center.y - half_h * 0.68;
+    let strip_rect = egui::Rect::from_center_size(
+        Pos2::new(center.x, top_y),
+        Vec2::new(half_w * 1.68, 22.0),
+    );
+    painter.rect_filled(strip_rect, 8.0, Color32::from_rgb(15, 18, 24));
+    painter.rect_stroke(
+        strip_rect,
+        8.0,
+        Stroke::new(1.0, Color32::from_rgb(44, 52, 66)),
+    );
+
+    for btn in ["volume_down", "action", "volume_up"] {
+        if let Some(bpos) = enclosure_button_pos(&norm, rect, btn) {
+            draw_cap_touch_button(
+                painter,
+                bpos,
+                btn,
+                is_btn_hovered(btn),
+                st.mics_muted,
+            );
+        }
+    }
+
+    // Световая матрица 11×8 (88 LED, /dev/fb0) под сенсорной планкой
+    let grid_rect = egui::Rect::from_min_max(
+        Pos2::new(center.x - half_w * 0.84, center.y - half_h * 0.36),
+        Pos2::new(center.x + half_w * 0.84, center.y + half_h * 0.84),
+    );
+    painter.rect_filled(grid_rect, 8.0, Color32::from_rgb(13, 16, 22));
+    painter.rect_stroke(
+        grid_rect,
+        8.0,
+        Stroke::new(1.0, Color32::from_rgb(40, 48, 60)),
+    );
+
+    let cols = 11usize;
+    let rows = 8usize;
+    let pad_x = 9.0;
+    let pad_y = 8.0;
+    let step_x = (grid_rect.width() - pad_x * 2.0) / ((cols - 1) as f32);
+    let step_y = (grid_rect.height() - pad_y * 2.0) / ((rows - 1) as f32);
+
+    for row in 0..rows {
+        for col in 0..cols {
+            let idx = row * cols + col;
+            let rgb = st.ring_pixels.get(idx).copied().unwrap_or([95, 45, 220]);
+            let pos = Pos2::new(
+                grid_rect.left() + pad_x + (col as f32) * step_x,
+                grid_rect.top() + pad_y + (row as f32) * step_y,
+            );
+            draw_ring_led(painter, pos, 2.7, rgb);
+        }
+    }
+}
+
 fn stage_box_frame(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::none()
         .fill(Color32::from_rgb(23, 25, 30))
@@ -786,6 +1130,24 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                         match board_enclosure_shape(&board_slug) {
                             EnclosureShape::CirclePuck => {
                                 render_circle_puck_enclosure(
+                                    &painter,
+                                    &board_slug,
+                                    rect,
+                                    &st,
+                                    hovered_target,
+                                );
+                            }
+                            EnclosureShape::SquircleCube => {
+                                render_squircle_cube_enclosure(
+                                    &painter,
+                                    &board_slug,
+                                    rect,
+                                    &st,
+                                    hovered_target,
+                                );
+                            }
+                            EnclosureShape::RectLightPanel => {
+                                render_rect_light_panel_enclosure(
                                     &painter,
                                     &board_slug,
                                     rect,
