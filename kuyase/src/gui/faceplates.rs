@@ -1,11 +1,14 @@
 use crate::gui::canvas::{draw_circular_oknix_logo, draw_ring_led};
 use crate::gui::display_geom::{
-    clock_inspector_text, clock_segment_lines, clock_special_positions, hit_test_clock_segment,
-    hit_test_matrix_pixel, mango_battery_led_rgb, matrix_inspector_text,
+    clock_inspector_text, clock_segment_lines_for_board, clock_special_positions,
+    hit_test_clock_segment_for_board, hit_test_matrix_pixel, mango_battery_led_rgb,
+    matrix_inspector_text,
 };
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
-use protocol::display::{build_segments_map_from_text, render_text_to_matrix_21x12};
+use protocol::display::{
+    board_clock_segment_count, build_segments_map_from_text_for_board, render_text_to_matrix_21x12,
+};
 use protocol::{BridgeStateSnapshot, HostCommand};
 use std::collections::BTreeMap;
 
@@ -27,7 +30,7 @@ fn pointer_draw_erase_mode(ui: &egui::Ui, resp: &egui::Response) -> Option<(Pos2
     }
 }
 
-fn apply_clock_text(app: &mut GuiAppState, text: &str) {
+fn apply_clock_text(app: &mut GuiAppState, board_slug: &str, text: &str) {
     let (br, built) = if text.is_empty() {
         app.clock_active_mask.clear();
         (0, BTreeMap::new())
@@ -35,7 +38,8 @@ fn apply_clock_text(app: &mut GuiAppState, text: &str) {
         if app.clock_brightness == 0 {
             app.clock_brightness = 255;
         }
-        let built = build_segments_map_from_text(text, app.clock_brightness);
+        let built =
+            build_segments_map_from_text_for_board(board_slug, text, app.clock_brightness);
         app.clock_active_mask = built
             .iter()
             .filter(|(_, &v)| v > 0)
@@ -142,6 +146,7 @@ fn draw_matrix_dot(painter: &egui::Painter, pos: Pos2, radius: f32, val: u8) {
 
 fn draw_segment_clock(
     painter: &egui::Painter,
+    board_slug: &str,
     rect: Rect,
     segments: &BTreeMap<String, u8>,
     hovered_seg: Option<&str>,
@@ -159,7 +164,7 @@ fn draw_segment_clock(
         }
     };
 
-    for (name, p0, p1) in clock_segment_lines(rect) {
+    for (name, p0, p1) in clock_segment_lines_for_board(board_slug, rect) {
         let br = segments.get(&name).copied().unwrap_or(0);
         let is_hovered = hovered_seg == Some(name.as_str());
         if is_hovered {
@@ -170,7 +175,7 @@ fn draw_segment_clock(
         }
         let is_aux_bar = matches!(
             name.as_str(),
-            "p4" | "p5" | "p6" | "p7" | "q4" | "q5" | "q6" | "q7" | "h2" | "l1" | "l2"
+            "p4" | "p5" | "p6" | "p7" | "q4" | "q5" | "q6" | "q7" | "h1" | "h2" | "l1" | "l2"
         );
         let stroke_w = if is_aux_bar { 3.0 } else { 3.6 };
         painter.line_segment([p0, p1], Stroke::new(stroke_w, seg_color(br, is_hovered)));
@@ -207,20 +212,48 @@ pub fn render_segment_clock_faceplate(
     st: &BridgeStateSnapshot,
     bridge_online: bool,
 ) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(
-            RichText::new("7-сегментный дисплей (45 сегментов) (?)")
-                .small()
-                .color(Color32::from_rgb(165, 175, 190)),
-        )
-        .on_hover_text(
-            "45-сегментный индикатор часов и символов (/sys/class/leds/<prefix>:white:clock-*):\n\
+    let seg_count = board_clock_segment_count(board_slug);
+    let header_label = match seg_count {
+        32 => "7-сегментный дисплей (32 сегмента) (?)",
+        36 => "7-сегментный дисплей (36 сегментов) (?)",
+        _ => "7-сегментный дисплей (45 сегментов) (?)",
+    };
+    let hover_tooltip = match protocol::normalize_board_slug(board_slug).as_str() {
+        "plum" => {
+            "36-сегментный индикатор часов Станции Лайт 2 (/sys/class/leds/plum:white:clock*):\n\
+             • Разряды 0..3 (28 сегментов): clockA0..clockG3 (a1..g4)\n\
+             • Надстрочные сегменты разрядов (4 сегмента): clockH0..clockH3 (h1, h2, l1, l2)\n\
+             • Центральный разделитель между 2-й и 3-й цифрами (3 сегмента): clockDH (p3), clockDL (q3), clockDM (m1)\n\
+             • Символ градуса (1 сегмент): clockDEGREE (deg)"
+        }
+        "yandexmini2" => {
+            "32-сегментный индикатор часов Станции Мини 2 (/sys/class/leds/mini2:white:clock*):\n\
+             • Разряды 1..4 (28 сегментов): clockA1..clockG4 (a1..g4)\n\
+             • Центральный разделитель между 2-й и 3-й цифрами (3 сегмента): clockPLUS1 (p3), clockPLUS2 (q3), clockMINUS (m1)\n\
+             • Символ градуса (1 сегмент): clockDEGREE (deg)"
+        }
+        "bergamot" | "pickle" => {
+            "32-сегментный индикатор часов (/sys/class/leds/<prefix>:white:clock*):\n\
+             • Разряды 0..3 (28 сегментов): clockA0..clockG3 (a1..g4)\n\
+             • Центральный разделитель между 2-й и 3-й цифрами (3 сегмента): clockDH (p3), clockDL (q3), clockDM (m1)\n\
+             • Символ градуса (1 сегмент): clockDEGREE (deg)"
+        }
+        _ => {
+            "45-сегментный индикатор часов и символов (/sys/class/leds/cucumber:white:clock-*):\n\
              • Разряды 1..4 (28 сегментов): a1..g1, a2..g2, a3..g3, a4..g4\n\
              • Надстрочные и подстрочные маркеры разрядов (8 сегментов): p4..p7 (верх), q4..q7 (низ)\n\
              • Центральное двоеточие (2 сегмента): p3 (верхняя точка), q3 (нижняя точка)\n\
-             • Левый знаковый блок (6 сегментов): h1 (clockH0), h2 (clockH1), m1 (clockMINUS), m2, l1 (clockH2), l2 (clockH3)\n\
-             • Символ градуса (1 сегмент): deg (clockDEGREE)",
-        );
+             • Левый знаковый блок (6 сегментов): h1, h2, m1, m2, l1, l2\n\
+             • Символ градуса (1 сегмент): deg"
+        }
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new(header_label)
+                .small()
+                .color(Color32::from_rgb(165, 175, 190)),
+        )
+        .on_hover_text(hover_tooltip);
         ui.separator();
         ui.label(
             RichText::new("ЛКМ: рисовать | ПКМ: стирать")
@@ -264,7 +297,7 @@ pub fn render_segment_clock_faceplate(
         .hover_pos()
         .or_else(|| cresp.interact_pointer_pos());
     let hovered_seg = if cresp.hovered() || cresp.dragged() {
-        hover_pos.and_then(|ptr| hit_test_clock_segment(crect, ptr))
+        hover_pos.and_then(|ptr| hit_test_clock_segment_for_board(board_slug, crect, ptr))
     } else {
         None
     };
@@ -273,10 +306,10 @@ pub fn render_segment_clock_faceplate(
     }
 
     let cp = ui.painter_at(crect);
-    draw_segment_clock(&cp, crect, &active_segs, hovered_seg.as_deref());
+    draw_segment_clock(&cp, board_slug, crect, &active_segs, hovered_seg.as_deref());
 
     if let Some((ptr, draw_mode)) = pointer_draw_erase_mode(ui, &cresp) {
-        if let Some(seg_key) = hit_test_clock_segment(crect, ptr) {
+        if let Some(seg_key) = hit_test_clock_segment_for_board(board_slug, crect, ptr) {
             let is_on = app.clock_active_mask.get(&seg_key).copied().unwrap_or(false)
                 && active_segs.get(&seg_key).copied().unwrap_or(0) > 0;
             if draw_mode != is_on {
@@ -326,13 +359,18 @@ pub fn render_segment_clock_faceplate(
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if enter || ui.button("Вывести").clicked() {
             let txt = app.clock_text_input.clone();
-            apply_clock_text(app, &txt);
+            apply_clock_text(app, board_slug, &txt);
         }
-        for preset in ["19:30", "+24°", "-05°", ""] {
-            let lbl = if preset.is_empty() { "Погасить" } else { preset };
+        for (lbl, preset) in [
+            ("19:30", "19:30"),
+            ("+24°", "+24°"),
+            ("-05°", "-05°"),
+            ("Глазки", "eyes"),
+            ("Погасить", ""),
+        ] {
             if ui.button(lbl).clicked() {
                 app.clock_text_input = preset.to_string();
-                apply_clock_text(app, preset);
+                apply_clock_text(app, board_slug, preset);
             }
         }
     });

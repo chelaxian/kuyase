@@ -97,7 +97,10 @@ impl BoardPeripherals {
         let front_display: Box<dyn FrontDisplayDevice> = if has_matrix {
             Box::new(OrionMatrix21x12Display::new())
         } else if profile.has_clock {
-            Box::new(SegmentClockSysfsDisplay::new(profile.sysfs_prefix.clone()))
+            Box::new(SegmentClockSysfsDisplay::new(
+                profile.board_slug.clone(),
+                profile.sysfs_prefix.clone(),
+            ))
         } else {
             Box::new(NullFrontDisplay)
         };

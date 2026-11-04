@@ -762,48 +762,62 @@ pub fn clock_special_positions(rect: Rect) -> (Pos2, Pos2, Pos2) {
     (p3_pos, q3_pos, deg_pos)
 }
 
-pub fn clock_segment_lines(rect: Rect) -> Vec<(String, Pos2, Pos2)> {
+pub fn clock_segment_lines_for_board(board_slug: &str, rect: Rect) -> Vec<(String, Pos2, Pos2)> {
+    let norm = protocol::normalize_board_slug(board_slug);
+    let seg_count = protocol::display::board_clock_segment_count(&norm);
     let digit_w = 24.0;
     let digit_h = 40.0;
     let start_x = rect.center().x - 66.0;
     let top_y = rect.center().y - digit_h * 0.5;
     let ym = top_y + digit_h * 0.5;
     let y1 = top_y + digit_h;
+    let colon_x = start_x + 2.0 * 34.0 - 1.0;
 
-    let mut out = Vec::with_capacity(42);
-    let plus_cx = start_x - 18.0;
-    // Left sign/icon block (6 segments: h2, h1, m1, m2, l1, l2 with non-overlapping midpoints)
-    out.push((
-        "h2".to_string(),
-        Pos2::new(plus_cx - 7.0, top_y - 1.0),
-        Pos2::new(plus_cx + 7.0, top_y - 1.0),
-    ));
-    out.push((
-        "h1".to_string(),
-        Pos2::new(plus_cx, ym - 11.0),
-        Pos2::new(plus_cx, ym - 2.0),
-    ));
-    out.push((
-        "m1".to_string(),
-        Pos2::new(plus_cx - 7.0, ym),
-        Pos2::new(plus_cx + 7.0, ym),
-    ));
-    out.push((
-        "m2".to_string(),
-        Pos2::new(plus_cx, ym + 2.0),
-        Pos2::new(plus_cx, ym + 10.0),
-    ));
-    out.push((
-        "l1".to_string(),
-        Pos2::new(plus_cx - 7.0, ym + 15.0),
-        Pos2::new(plus_cx + 7.0, ym + 15.0),
-    ));
-    out.push((
-        "l2".to_string(),
-        Pos2::new(plus_cx - 7.0, y1 + 1.0),
-        Pos2::new(plus_cx + 7.0, y1 + 1.0),
-    ));
+    let mut out = Vec::with_capacity(seg_count);
+    if seg_count == 45 {
+        let plus_cx = start_x - 18.0;
+        // Left sign/icon block (6 segments: h2, h1, m1, m2, l1, l2 with non-overlapping midpoints)
+        out.push((
+            "h2".to_string(),
+            Pos2::new(plus_cx - 7.0, top_y - 1.0),
+            Pos2::new(plus_cx + 7.0, top_y - 1.0),
+        ));
+        out.push((
+            "h1".to_string(),
+            Pos2::new(plus_cx, ym - 11.0),
+            Pos2::new(plus_cx, ym - 2.0),
+        ));
+        out.push((
+            "m1".to_string(),
+            Pos2::new(plus_cx - 7.0, ym),
+            Pos2::new(plus_cx + 7.0, ym),
+        ));
+        out.push((
+            "m2".to_string(),
+            Pos2::new(plus_cx, ym + 2.0),
+            Pos2::new(plus_cx, ym + 10.0),
+        ));
+        out.push((
+            "l1".to_string(),
+            Pos2::new(plus_cx - 7.0, ym + 15.0),
+            Pos2::new(plus_cx + 7.0, ym + 15.0),
+        ));
+        out.push((
+            "l2".to_string(),
+            Pos2::new(plus_cx - 7.0, y1 + 1.0),
+            Pos2::new(plus_cx + 7.0, y1 + 1.0),
+        ));
+    } else {
+        // On 32- and 36-segment boards, m1 (DM / MINUS) is the horizontal bar in the central
+        // separator between digits 2 and 3 right between p3 (DH/PLUS1) and q3 (DL/PLUS2).
+        out.push((
+            "m1".to_string(),
+            Pos2::new(colon_x - 4.5, ym),
+            Pos2::new(colon_x + 4.5, ym),
+        ));
+    }
 
+    let plum_top_bars = ["h1", "h2", "l1", "l2"];
     for idx in 0..4 {
         let pos = idx + 1;
         let extra_idx = idx + 4;
@@ -821,31 +835,48 @@ pub fn clock_segment_lines(rect: Rect) -> Vec<(String, Pos2, Pos2)> {
         for (part, p0, p1) in coords {
             out.push((format!("{}{}", part, pos), p0, p1));
         }
-        // Upper (p4..p7) and lower (q4..q7) indicator segments above/below digits 1..4
-        out.push((
-            format!("p{}", extra_idx),
-            Pos2::new(x0 + 4.0, top_y - 6.5),
-            Pos2::new(x1 - 4.0, top_y - 6.5),
-        ));
-        out.push((
-            format!("q{}", extra_idx),
-            Pos2::new(x0 + 4.0, y1 + 6.5),
-            Pos2::new(x1 - 4.0, y1 + 6.5),
-        ));
+        if seg_count == 45 {
+            // Upper (p4..p7) and lower (q4..q7) indicator segments above/below digits 1..4
+            out.push((
+                format!("p{}", extra_idx),
+                Pos2::new(x0 + 4.0, top_y - 6.5),
+                Pos2::new(x1 - 4.0, top_y - 6.5),
+            ));
+            out.push((
+                format!("q{}", extra_idx),
+                Pos2::new(x0 + 4.0, y1 + 6.5),
+                Pos2::new(x1 - 4.0, y1 + 6.5),
+            ));
+        } else if seg_count == 36 {
+            // On plum (36 segments), H0..H3 (h1, h2, l1, l2) are above digits 1..4
+            out.push((
+                plum_top_bars[idx].to_string(),
+                Pos2::new(x0 + 4.0, top_y - 6.5),
+                Pos2::new(x1 - 4.0, top_y - 6.5),
+            ));
+        }
     }
     out
 }
 
-pub fn hit_test_clock_segment(rect: Rect, pointer: Pos2) -> Option<String> {
+pub fn clock_segment_lines(rect: Rect) -> Vec<(String, Pos2, Pos2)> {
+    clock_segment_lines_for_board("cucumber", rect)
+}
+
+pub fn hit_test_clock_segment_for_board(
+    board_slug: &str,
+    rect: Rect,
+    pointer: Pos2,
+) -> Option<String> {
     if !rect.contains(pointer) {
         return None;
     }
     let (p3_pos, q3_pos, deg_pos) = clock_special_positions(rect);
 
-    if pointer.distance(p3_pos) <= 6.5 {
+    if pointer.distance(p3_pos) <= 5.5 {
         return Some("p3".to_string());
     }
-    if pointer.distance(q3_pos) <= 6.5 {
+    if pointer.distance(q3_pos) <= 5.5 {
         return Some("q3".to_string());
     }
     if pointer.distance(deg_pos) <= 7.5 {
@@ -853,7 +884,7 @@ pub fn hit_test_clock_segment(rect: Rect, pointer: Pos2) -> Option<String> {
     }
 
     let mut best: Option<(String, f32)> = None;
-    for (name, p0, p1) in clock_segment_lines(rect) {
+    for (name, p0, p1) in clock_segment_lines_for_board(board_slug, rect) {
         let d = dist_to_segment(pointer, p0, p1);
         if d <= 6.0 && best.as_ref().map(|(_, b)| d < *b).unwrap_or(true) {
             best = Some((name, d));
@@ -862,22 +893,48 @@ pub fn hit_test_clock_segment(rect: Rect, pointer: Pos2) -> Option<String> {
     best.map(|(n, _)| n)
 }
 
+pub fn hit_test_clock_segment(rect: Rect, pointer: Pos2) -> Option<String> {
+    hit_test_clock_segment_for_board("cucumber", rect, pointer)
+}
+
 pub fn clock_inspector_text(
     board_slug: &str,
     hovered_seg: Option<&str>,
     segments: &BTreeMap<String, u8>,
     default_pwm: u8,
 ) -> String {
-    let prefix = protocol::find_board_descriptor(board_slug)
+    let norm = protocol::normalize_board_slug(board_slug);
+    let prefix = protocol::find_board_descriptor(&norm)
         .map(|b| b.sysfs_prefix)
-        .unwrap_or(if board_slug.is_empty() {
+        .unwrap_or(if norm.is_empty() {
             "cucumber"
         } else {
-            board_slug
+            norm.as_str()
         });
     if let Some(seg) = hovered_seg {
         let br = segments.get(seg).copied().unwrap_or(0);
-        if let Some(alias) = clock_segment_alias_info(seg) {
+        if let (Some(native_led), Some(short)) = (
+            protocol::display::board_clock_native_led_name(&norm, seg),
+            protocol::display::board_clock_native_short_name(&norm, seg),
+        ) {
+            let canonical_short = format!("clock-{}", seg);
+            if short != canonical_short {
+                format!(
+                    "Сегмент {} ({}) | /sys/class/leds/{}/brightness | PWM: {} | ЛКМ: зажечь | ПКМ: погасить",
+                    seg, short, native_led, br
+                )
+            } else if let Some(alias) = clock_segment_alias_info(seg) {
+                format!(
+                    "Сегмент {} ({}) | /sys/class/leds/{}/brightness | PWM: {} | ЛКМ: зажечь | ПКМ: погасить",
+                    seg, alias, native_led, br
+                )
+            } else {
+                format!(
+                    "Сегмент {} | /sys/class/leds/{}/brightness | PWM: {} | ЛКМ: зажечь | ПКМ: погасить",
+                    seg, native_led, br
+                )
+            }
+        } else if let Some(alias) = clock_segment_alias_info(seg) {
             format!(
                 "Сегмент {} ({}) | /sys/class/leds/{}:white:clock-{}/brightness | PWM: {} | ЛКМ: зажечь | ПКМ: погасить",
                 seg, alias, prefix, seg, br
@@ -889,10 +946,24 @@ pub fn clock_inspector_text(
             )
         }
     } else {
-        format!(
-            "45 сегментов (a1..g4, p3..q7, h1..l2, deg) | Наведите на сегмент | ЛКМ: зажечь, ПКМ: погасить (PWM: {})",
-            default_pwm
-        )
+        match norm.as_str() {
+            "plum" => format!(
+                "36 сегментов (A0..G3, H0..H3, DH, DL, DM, DEGREE) | Наведите на сегмент | ЛКМ: зажечь, ПКМ: погасить (PWM: {})",
+                default_pwm
+            ),
+            "yandexmini2" => format!(
+                "32 сегмента (A1..G4, PLUS1, PLUS2, MINUS, DEGREE) | Наведите на сегмент | ЛКМ: зажечь, ПКМ: погасить (PWM: {})",
+                default_pwm
+            ),
+            "bergamot" | "pickle" => format!(
+                "32 сегмента (A0..G3, DH, DL, DM, DEGREE) | Наведите на сегмент | ЛКМ: зажечь, ПКМ: погасить (PWM: {})",
+                default_pwm
+            ),
+            _ => format!(
+                "45 сегментов (a1..g4, p3..q7, h1..l2, deg) | Наведите на сегмент | ЛКМ: зажечь, ПКМ: погасить (PWM: {})",
+                default_pwm
+            ),
+        }
     }
 }
 
@@ -1011,7 +1082,7 @@ mod tests {
         }
     }
 
-    fn clock_segment_center(rect: Rect, name: &str) -> Option<Pos2> {
+    fn clock_segment_center_for_board(board_slug: &str, rect: Rect, name: &str) -> Option<Pos2> {
         let (p3_pos, q3_pos, deg_pos) = clock_special_positions(rect);
         match name {
             "p3" => return Some(p3_pos),
@@ -1019,12 +1090,16 @@ mod tests {
             "deg" => return Some(deg_pos),
             _ => {}
         }
-        for (seg_name, p0, p1) in clock_segment_lines(rect) {
+        for (seg_name, p0, p1) in clock_segment_lines_for_board(board_slug, rect) {
             if seg_name == name {
                 return Some(Pos2::new((p0.x + p1.x) * 0.5, (p0.y + p1.y) * 0.5));
             }
         }
         None
+    }
+
+    fn clock_segment_center(rect: Rect, name: &str) -> Option<Pos2> {
+        clock_segment_center_for_board("cucumber", rect, name)
     }
 
     #[test]
@@ -1053,6 +1128,60 @@ mod tests {
             );
         }
 
+        // Board-specific 36-segment (plum) and 32-segment (bergamot, pickle, yandexmini2) hit-testing
+        assert_eq!(clock_segment_lines_for_board("plum", rect).len(), 33);
+        for slug in ["bergamot", "pickle", "yandexmini2"] {
+            assert_eq!(clock_segment_lines_for_board(slug, rect).len(), 29);
+        }
+
+        for slug in ["cucumber", "plum", "bergamot", "pickle", "yandexmini2"] {
+            let active_names = protocol::display::board_clock_segment_names(slug);
+            for name in &active_names {
+                let center = clock_segment_center_for_board(slug, rect, name)
+                    .unwrap_or_else(|| panic!("Missing center for segment {} on {}", name, slug));
+                assert_eq!(
+                    hit_test_clock_segment_for_board(slug, rect, center),
+                    Some(name.clone()),
+                    "Hit test at center {:?} failed for segment {} on {}",
+                    center,
+                    name,
+                    slug
+                );
+            }
+        }
+
+        // Nonexistent segments on 32/36-segment boards (q4..q7, left sign block) must return None
+        let cuc_q4_center = clock_segment_center_for_board("cucumber", rect, "q4").unwrap();
+        let cuc_m2_center = clock_segment_center_for_board("cucumber", rect, "m2").unwrap();
+        let cuc_p4_center = clock_segment_center_for_board("cucumber", rect, "p4").unwrap();
+        assert_eq!(
+            hit_test_clock_segment_for_board("plum", rect, cuc_q4_center),
+            None
+        );
+        assert_eq!(
+            hit_test_clock_segment_for_board("plum", rect, cuc_m2_center),
+            None
+        );
+        // On plum, the top bar above digit 1 is h1 (clockH0), not p4
+        assert_eq!(
+            hit_test_clock_segment_for_board("plum", rect, cuc_p4_center),
+            Some("h1".to_string())
+        );
+        for slug in ["bergamot", "pickle", "yandexmini2"] {
+            assert_eq!(
+                hit_test_clock_segment_for_board(slug, rect, cuc_p4_center),
+                None
+            );
+            assert_eq!(
+                hit_test_clock_segment_for_board(slug, rect, cuc_q4_center),
+                None
+            );
+            assert_eq!(
+                hit_test_clock_segment_for_board(slug, rect, cuc_m2_center),
+                None
+            );
+        }
+
         let mrect = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(283.0, 166.0));
         assert_eq!(
             hit_test_matrix_pixel(mrect, 13.0, Pos2::new(17.0, 17.0)),
@@ -1073,13 +1202,28 @@ mod tests {
         let mut segs = BTreeMap::new();
         segs.insert("h1".to_string(), 200);
         segs.insert("p4".to_string(), 128);
+        segs.insert("m1".to_string(), 210);
+        segs.insert("a1".to_string(), 240);
 
-        let h1_info = clock_inspector_text("yandexmini2", Some("h1"), &segs, 255);
-        assert!(h1_info.contains("h1"));
-        assert!(h1_info.contains("clockH0"));
-        assert!(h1_info.contains("/sys/class/leds/mini2:white:clock-h1/brightness"));
-        assert!(h1_info.contains("PWM: 200"));
-        assert!(h1_info.contains("ЛКМ: зажечь | ПКМ: погасить"));
+        let plum_h1 = clock_inspector_text("plum", Some("h1"), &segs, 255);
+        assert!(plum_h1.contains("h1"));
+        assert!(plum_h1.contains("clockH0"));
+        assert!(plum_h1.contains("/sys/class/leds/plum:white:clockH0/brightness"));
+        assert!(plum_h1.contains("PWM: 200"));
+
+        let mini2_m1 = clock_inspector_text("yandexmini2", Some("m1"), &segs, 255);
+        assert!(mini2_m1.contains("m1"));
+        assert!(mini2_m1.contains("clockMINUS"));
+        assert!(mini2_m1.contains("/sys/class/leds/mini2:white:clockMINUS/brightness"));
+        assert!(mini2_m1.contains("PWM: 210"));
+
+        let berg_m1 = clock_inspector_text("bergamot", Some("m1"), &segs, 255);
+        assert!(berg_m1.contains("clockDM"));
+        assert!(berg_m1.contains("/sys/class/leds/bergamot:white:clockDM/brightness"));
+
+        let pickle_a1 = clock_inspector_text("pickle", Some("a1"), &segs, 255);
+        assert!(pickle_a1.contains("clockA0"));
+        assert!(pickle_a1.contains("/sys/class/leds/pickle:white:clockA0/brightness"));
 
         let p4_info = clock_inspector_text("cucumber", Some("p4"), &segs, 255);
         assert!(p4_info.contains("p4"));
@@ -1087,9 +1231,20 @@ mod tests {
         assert!(p4_info.contains("/sys/class/leds/cucumber:white:clock-p4/brightness"));
         assert!(p4_info.contains("PWM: 128"));
 
-        let idle_clock = clock_inspector_text("cucumber", None, &segs, 255);
-        assert!(idle_clock.contains("45 сегментов"));
-        assert!(idle_clock.contains("PWM: 255"));
+        let idle_cuc = clock_inspector_text("cucumber", None, &segs, 255);
+        assert!(idle_cuc.contains("45 сегментов"));
+        assert!(idle_cuc.contains("PWM: 255"));
+
+        let idle_plum = clock_inspector_text("plum", None, &segs, 255);
+        assert!(idle_plum.contains("36 сегментов (A0..G3, H0..H3, DH, DL, DM, DEGREE)"));
+
+        let idle_mini2 = clock_inspector_text("yandexmini2", None, &segs, 255);
+        assert!(idle_mini2.contains("32 сегмента (A1..G4, PLUS1, PLUS2, MINUS, DEGREE)"));
+
+        for slug in ["bergamot", "pickle"] {
+            let idle = clock_inspector_text(slug, None, &segs, 255);
+            assert!(idle.contains("32 сегмента (A0..G3, DH, DL, DM, DEGREE)"));
+        }
 
         let mut px = vec![0u8; 252];
         px[0] = 255;

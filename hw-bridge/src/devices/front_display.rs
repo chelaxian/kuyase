@@ -1,9 +1,10 @@
 use super::{find_framebuffer_by_name, read_sysfs_u8};
 use crate::leds::parse_led_pattern_str;
 pub use protocol::display::{
-    build_segments_map_from_text, canonical_clock_segment_names, empty_clock_segments_map,
-    is_valid_clock_segment, parse_clock_segment_spec, parse_display_led_frame,
-    render_text_to_matrix_21x12, ParsedLedDisplayFrame,
+    board_clock_native_led_name, build_segments_map_from_text_for_board,
+    canonical_clock_segment_names, empty_clock_segments_map, normalize_clock_segment_name,
+    parse_clock_segment_spec, parse_display_led_frame, render_text_to_matrix_21x12,
+    ParsedLedDisplayFrame,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -58,17 +59,42 @@ impl FrontDisplayDevice for NullFrontDisplay {
 }
 
 pub struct SegmentClockSysfsDisplay {
+    pub board_slug: String,
     pub sysfs_prefix: String,
     pub saved_segments: Mutex<BTreeMap<String, u8>>,
     pub active_mask: Mutex<BTreeMap<String, bool>>,
 }
 
 impl SegmentClockSysfsDisplay {
-    pub fn new(sysfs_prefix: String) -> Self {
+    pub fn new(board_slug: String, sysfs_prefix: String) -> Self {
         Self {
+            board_slug,
             sysfs_prefix,
             saved_segments: Mutex::new(empty_clock_segments_map()),
             active_mask: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    fn resolve_segment_brightness_path(&self, canonical_seg: &str) -> Option<String> {
+        let canonical_path = format!(
+            "/sys/class/leds/{}:white:clock-{}/brightness",
+            self.sysfs_prefix, canonical_seg
+        );
+        if Path::new(&canonical_path).exists() {
+            return Some(canonical_path);
+        }
+        if let Some(native_led) = board_clock_native_led_name(&self.board_slug, canonical_seg) {
+            let native_path = format!("/sys/class/leds/{}/brightness", native_led);
+            if Path::new(&native_path).exists() {
+                return Some(native_path);
+            }
+        }
+        None
+    }
+
+    fn write_segment_sysfs(&self, canonical_seg: &str, val: u8) {
+        if let Some(path) = self.resolve_segment_brightness_path(canonical_seg) {
+            let _ = fs::write(path, val.to_string());
         }
     }
 }
@@ -81,21 +107,20 @@ impl FrontDisplayDevice for SegmentClockSysfsDisplay {
     fn init(&self) {}
 
     fn read_display(&self) -> FrontDisplayReadout {
+        let saved = self.saved_segments.lock().unwrap().clone();
         let mut clock_map = BTreeMap::new();
         let mut any_sysfs = false;
         for seg in canonical_clock_segment_names() {
-            let path = format!(
-                "/sys/class/leds/{}:white:clock-{}/brightness",
-                self.sysfs_prefix, seg
-            );
-            if Path::new(&path).exists() {
+            let v = if let Some(path) = self.resolve_segment_brightness_path(&seg) {
                 any_sysfs = true;
-            }
-            let v = read_sysfs_u8(&path);
+                read_sysfs_u8(&path)
+            } else {
+                saved.get(&seg).copied().unwrap_or(0)
+            };
             clock_map.insert(seg, v);
         }
         if !any_sysfs {
-            clock_map = self.saved_segments.lock().unwrap().clone();
+            clock_map = saved;
         }
         FrontDisplayReadout {
             display_kind: "segment_clock",
@@ -114,7 +139,7 @@ impl FrontDisplayDevice for SegmentClockSysfsDisplay {
             self.write_display_segments(&seg_map, true);
             return;
         }
-        let segs = build_segments_map_from_text(text, brightness);
+        let segs = build_segments_map_from_text_for_board(&self.board_slug, text, brightness);
         self.write_display_segments(&segs, true);
     }
 
@@ -125,8 +150,7 @@ impl FrontDisplayDevice for SegmentClockSysfsDisplay {
             *cur = empty_clock_segments_map();
             mask.clear();
             for (k, &v) in segments {
-                if is_valid_clock_segment(k) {
-                    let loc = k.to_ascii_lowercase();
+                if let Some(loc) = normalize_clock_segment_name(k) {
                     cur.insert(loc.clone(), v);
                     if v > 0 {
                         mask.insert(loc, true);
@@ -134,27 +158,18 @@ impl FrontDisplayDevice for SegmentClockSysfsDisplay {
                 }
             }
             for (loc, &val) in cur.iter() {
-                let p = format!(
-                    "/sys/class/leds/{}:white:clock-{}/brightness",
-                    self.sysfs_prefix, loc
-                );
-                let _ = fs::write(p, val.to_string());
+                self.write_segment_sysfs(loc, val);
             }
         } else {
             for (k, &val) in segments {
-                if is_valid_clock_segment(k) {
-                    let loc = k.to_ascii_lowercase();
+                if let Some(loc) = normalize_clock_segment_name(k) {
                     cur.insert(loc.clone(), val);
                     if val > 0 {
                         mask.insert(loc.clone(), true);
                     } else {
                         mask.remove(&loc);
                     }
-                    let p = format!(
-                        "/sys/class/leds/{}:white:clock-{}/brightness",
-                        self.sysfs_prefix, loc
-                    );
-                    let _ = fs::write(p, val.to_string());
+                    self.write_segment_sysfs(&loc, val);
                 }
             }
         }
@@ -187,11 +202,7 @@ impl FrontDisplayDevice for SegmentClockSysfsDisplay {
         let mut cur = self.saved_segments.lock().unwrap();
         for k in &mask_keys {
             cur.insert(k.clone(), brightness);
-            let p = format!(
-                "/sys/class/leds/{}:white:clock-{}/brightness",
-                self.sysfs_prefix, k
-            );
-            let _ = fs::write(p, brightness.to_string());
+            self.write_segment_sysfs(k, brightness);
         }
     }
 
