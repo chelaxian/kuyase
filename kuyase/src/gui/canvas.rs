@@ -7,7 +7,7 @@ use crate::gui::display_geom::{
 };
 use crate::gui::faceplates::{
     render_aux_logo_strip, render_display_inspector_bar, render_matrix_21x12_faceplate,
-    render_segment_clock_faceplate,
+    render_segment_clock_faceplate, render_station2_light_panel_faceplate,
 };
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Margin, Pos2, RichText, Sense, Stroke, Vec2};
@@ -1003,6 +1003,9 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
         st.tof_mm = app.tof_slider;
         st.doa_angle = app.doa_slider;
         st.volume_level = app.volume_slider;
+        if board_slug == "station2" && st.ring_pixels.len() < 88 {
+            st.ring_pixels = app.station2_custom_pixels.clone();
+        }
     }
 
     egui::ScrollArea::vertical()
@@ -1388,12 +1391,14 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
 
                     ui.add_space(6.0);
 
-                    // 2. Dynamic Front Faceplate Display (Segment Clock OR 21x12 Matrix)
+                    // 2. Dynamic Front Faceplate Display (Segment Clock OR 21x12 Matrix OR Station 2 Top Light Panel)
                     stage_box_frame(ui, |ui| {
                         if board_has_matrix_21x12(&board_slug, &st.display_kind) {
                             render_matrix_21x12_faceplate(ui, app, &st, bridge_online);
                         } else if board_has_segment_clock(&board_slug, st.has_clock, &st.display_kind) {
                             render_segment_clock_faceplate(ui, app, &board_slug, &st, bridge_online);
+                        } else if board_slug == "station2" {
+                            render_station2_light_panel_faceplate(ui, app, &mut st, bridge_online);
                         } else if board_slug == "mango" {
                             ui.label(
                                 RichText::new(

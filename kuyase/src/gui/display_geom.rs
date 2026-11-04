@@ -979,6 +979,227 @@ pub fn hit_test_matrix_pixel(rect: Rect, cell: f32, pointer: Pos2) -> Option<usi
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Station2FaceplateLayout {
+    pub outer_rect: Rect,
+    pub strip_rect: Rect,
+    pub minus_pos: Pos2,
+    pub action_pos: Pos2,
+    pub plus_pos: Pos2,
+    pub panel_rect: Rect,
+    pub grid_rect: Rect,
+    pub cell_size: f32,
+}
+
+pub fn station2_faceplate_layout(outer_rect: Rect) -> Station2FaceplateLayout {
+    let max_cell_w = ((outer_rect.width() - 28.0) / (STATION2_PANEL_COLS as f32)).max(10.0);
+    let max_cell_h = ((outer_rect.height() - 44.0) / (STATION2_PANEL_ROWS as f32)).max(10.0);
+    let cell_size = max_cell_w.min(max_cell_h).clamp(12.0, 17.0);
+    let grid_w = (STATION2_PANEL_COLS as f32) * cell_size;
+    let grid_h = (STATION2_PANEL_ROWS as f32) * cell_size;
+
+    let strip_y = outer_rect.top() + 15.0;
+    let strip_w = (grid_w + 12.0).min((outer_rect.width() - 16.0).max(120.0));
+    let strip_rect = Rect::from_center_size(
+        Pos2::new(outer_rect.center().x, strip_y),
+        eframe::egui::Vec2::new(strip_w, 20.0),
+    );
+    let btn_off = (strip_w * 0.34).max(34.0);
+    let action_pos = Pos2::new(strip_rect.center().x, strip_y);
+    let minus_pos = Pos2::new(strip_rect.center().x - btn_off, strip_y);
+    let plus_pos = Pos2::new(strip_rect.center().x + btn_off, strip_y);
+
+    let grid_top = strip_rect.bottom() + 9.0;
+    let grid_left = outer_rect.center().x - grid_w * 0.5;
+    let grid_rect = Rect::from_min_size(
+        Pos2::new(grid_left, grid_top),
+        eframe::egui::Vec2::new(grid_w, grid_h),
+    );
+    let panel_rect = grid_rect.expand(4.0);
+
+    Station2FaceplateLayout {
+        outer_rect,
+        strip_rect,
+        minus_pos,
+        action_pos,
+        plus_pos,
+        panel_rect,
+        grid_rect,
+        cell_size,
+    }
+}
+
+pub fn station2_faceplate_pixel_center(
+    grid_rect: Rect,
+    cell_size: f32,
+    col: usize,
+    row: usize,
+) -> Pos2 {
+    Pos2::new(
+        grid_rect.left() + (col as f32 + 0.5) * cell_size,
+        grid_rect.top() + (row as f32 + 0.5) * cell_size,
+    )
+}
+
+pub fn hit_test_station2_faceplate_pixel(
+    grid_rect: Rect,
+    cell_size: f32,
+    pointer: Pos2,
+) -> Option<usize> {
+    if cell_size <= 0.0 || !grid_rect.contains(pointer) {
+        return None;
+    }
+    let col = ((pointer.x - grid_rect.left()) / cell_size).floor() as isize;
+    let row = ((pointer.y - grid_rect.top()) / cell_size).floor() as isize;
+    if (0..(STATION2_PANEL_COLS as isize)).contains(&col)
+        && (0..(STATION2_PANEL_ROWS as isize)).contains(&row)
+    {
+        Some((row as usize) * STATION2_PANEL_COLS + (col as usize))
+    } else {
+        None
+    }
+}
+
+pub fn station2_panel_inspector_text(
+    hovered_idx: Option<usize>,
+    pixels: &[[u8; 3]],
+    brush_rgb: [u8; 3],
+    brightness: u8,
+) -> String {
+    if let Some(idx) = hovered_idx.filter(|&i| i < STATION2_PANEL_COLS * STATION2_PANEL_ROWS) {
+        let col = idx % STATION2_PANEL_COLS;
+        let row = idx / STATION2_PANEL_COLS;
+        let [r, g, b] = pixels.get(idx).copied().unwrap_or([0, 0, 0]);
+        format!(
+            "Пиксель [{col}, {row}] (LED #{idx}) | /sys/class/leds/station2:*:ring{idx} (/dev/fb0) | RGB({r}, {g}, {b}) #{r:02X}{g:02X}{b:02X} | ЛКМ: рисовать, ПКМ: стереть"
+        )
+    } else {
+        let [br, bg, bb] = brush_rgb;
+        format!(
+            "Верхняя панель 11×8 (88 LED, /dev/fb0) | Кисть: #{br:02X}{bg:02X}{bb:02X} | PWM: {brightness} | Наведите на пиксель"
+        )
+    }
+}
+
+pub fn scale_rgb_brightness(rgb: [u8; 3], brightness: u8) -> [u8; 3] {
+    let scale = |c: u8| -> u8 { (((c as u16) * (brightness as u16) + 127) / 255) as u8 };
+    [scale(rgb[0]), scale(rgb[1]), scale(rgb[2])]
+}
+
+pub fn format_station2_frame_command(pixels: &[[u8; 3]]) -> String {
+    let total = STATION2_PANEL_COLS * STATION2_PANEL_ROWS;
+    let mut out = String::with_capacity(6 + total * 7);
+    out.push_str("frame:");
+    for idx in 0..total {
+        if idx > 0 {
+            out.push(' ');
+        }
+        let [r, g, b] = pixels.get(idx).copied().unwrap_or([0, 0, 0]);
+        out.push_str(&format!("{:02x}{:02x}{:02x}", r, g, b));
+    }
+    out
+}
+
+fn hsv_to_rgb_u8(hue_deg: f32, sat: f32, val: f32) -> [u8; 3] {
+    let h = hue_deg.rem_euclid(360.0);
+    let c = val * sat;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = val - c;
+    let (r1, g1, b1) = if h < 60.0 {
+        (c, x, 0.0)
+    } else if h < 120.0 {
+        (x, c, 0.0)
+    } else if h < 180.0 {
+        (0.0, c, x)
+    } else if h < 240.0 {
+        (0.0, x, c)
+    } else if h < 300.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    [
+        ((r1 + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((g1 + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((b1 + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+    ]
+}
+
+pub fn build_station2_preset_frame(
+    preset: &str,
+    brush_rgb: [u8; 3],
+    brightness: u8,
+) -> Vec<[u8; 3]> {
+    let total = STATION2_PANEL_COLS * STATION2_PANEL_ROWS;
+    match preset.trim().to_ascii_lowercase().as_str() {
+        "clear" => vec![[0, 0, 0]; total],
+        "fill" => vec![scale_rgb_brightness(brush_rgb, brightness); total],
+        "heart" => {
+            const HEART_MASK: [[u8; 11]; 8] = [
+                [0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0],
+                [0, 1, 2, 1, 1, 0, 1, 1, 1, 1, 0],
+                [0, 1, 2, 2, 1, 1, 1, 1, 1, 1, 0],
+                [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+                [0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0],
+                [0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0],
+                [0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+            ];
+            let mut out = vec![[0, 0, 0]; total];
+            for (row, row_mask) in HEART_MASK.iter().enumerate() {
+                for (col, &cell) in row_mask.iter().enumerate() {
+                    let idx = row * STATION2_PANEL_COLS + col;
+                    let base = match cell {
+                        2 => [255, 80, 130],
+                        1 => [255, 35, 95],
+                        _ => [0, 0, 0],
+                    };
+                    out[idx] = scale_rgb_brightness(base, brightness);
+                }
+            }
+            out
+        }
+        "rainbow" => {
+            let mut out = Vec::with_capacity(total);
+            for row in 0..STATION2_PANEL_ROWS {
+                for col in 0..STATION2_PANEL_COLS {
+                    let hue = ((col as f32) * 32.0 + (row as f32) * 14.0) % 360.0;
+                    let base = hsv_to_rgb_u8(hue, 0.90, 1.0);
+                    out.push(scale_rgb_brightness(base, brightness));
+                }
+            }
+            out
+        }
+        _ => {
+            // Default / "wave": sinusoidal wave across 11 columns × 8 rows in Alice violet/cyan/emerald
+            let mut out = vec![[0, 0, 0]; total];
+            for col in 0..STATION2_PANEL_COLS {
+                let top_row = (2.5 + ((col as f32) * 0.72).sin() * 2.0)
+                    .round()
+                    .clamp(1.0, 5.0) as usize;
+                let t = (col as f32) / ((STATION2_PANEL_COLS - 1) as f32);
+                let base_r = (107.0 * (1.0 - t) + 16.0 * t).round() as u8;
+                let base_g = (20.0 * (1.0 - t) + 235.0 * t).round() as u8;
+                let base_b = 255u8;
+                for row in top_row..STATION2_PANEL_ROWS {
+                    let idx = row * STATION2_PANEL_COLS + col;
+                    let raw = if row == top_row {
+                        [
+                            base_r.saturating_add(45),
+                            base_g.saturating_add(30),
+                            255,
+                        ]
+                    } else {
+                        [base_r, base_g, base_b]
+                    };
+                    out[idx] = scale_rgb_brightness(raw, brightness);
+                }
+            }
+            out
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1448,5 +1669,104 @@ mod tests {
                 enclosure_hover_inspector_text("mango", rect, Some(m.usbc_pos), &st, "single");
             assert!(usbc_act && usbc_txt.contains("IP2366") && usbc_txt.contains("CW2217"));
         }
+    }
+
+    #[test]
+    fn test_station2_faceplate_hit_testing_inspector_and_presets() {
+        let outer = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(280.0, 178.0));
+        let layout = station2_faceplate_layout(outer);
+        assert!(layout.strip_rect.bottom() < layout.grid_rect.top());
+
+        // 1. Corners and center hit-testing on 11x8 grid
+        for (col, row, expected_idx) in [
+            (0usize, 0usize, 0usize),
+            (10, 0, 10),
+            (0, 7, 77),
+            (10, 7, 87),
+            (5, 4, 49),
+        ] {
+            let pt =
+                station2_faceplate_pixel_center(layout.grid_rect, layout.cell_size, col, row);
+            assert_eq!(
+                hit_test_station2_faceplate_pixel(layout.grid_rect, layout.cell_size, pt),
+                Some(expected_idx),
+                "expected pixel [{col}, {row}] -> #{expected_idx}"
+            );
+        }
+
+        // 2. Top reference touch bar [ - ] [ o ] [ + ] above grid_rect must return None
+        for bar_pt in [
+            layout.minus_pos,
+            layout.action_pos,
+            layout.plus_pos,
+            layout.strip_rect.center(),
+        ] {
+            assert_eq!(
+                hit_test_station2_faceplate_pixel(layout.grid_rect, layout.cell_size, bar_pt),
+                None
+            );
+        }
+
+        // 3. Inspector bar text for hovered pixel and None
+        let mut px = vec![[0u8; 3]; 88];
+        px[0] = [0x6B, 0x0F, 0xFF];
+        px[87] = [0x00, 0xFF, 0x80];
+        let hov0 = station2_panel_inspector_text(Some(0), &px, [0x6B, 0x0F, 0xFF], 255);
+        assert!(hov0.contains("[0, 0]"));
+        assert!(hov0.contains("LED #0"));
+        assert!(hov0.contains("station2:*:ring0"));
+        assert!(hov0.contains("/dev/fb0"));
+        assert!(hov0.contains("RGB(107, 15, 255)"));
+        assert!(hov0.contains("#6B0FFF"));
+
+        let hov87 = station2_panel_inspector_text(Some(87), &px, [0x6B, 0x0F, 0xFF], 200);
+        assert!(hov87.contains("[10, 7]"));
+        assert!(hov87.contains("LED #87"));
+        assert!(hov87.contains("station2:*:ring87"));
+        assert!(hov87.contains("RGB(0, 255, 128)"));
+        assert!(hov87.contains("#00FF80"));
+
+        let idle = station2_panel_inspector_text(None, &px, [0x00, 0xE5, 0xFF], 180);
+        assert!(idle.contains("Верхняя панель 11×8 (88 LED, /dev/fb0)"));
+        assert!(idle.contains("#00E5FF"));
+        assert!(idle.contains("PWM: 180"));
+
+        // 4. Preset frame generators and brightness scaling
+        let clear = build_station2_preset_frame("clear", [0x6B, 0x0F, 0xFF], 255);
+        assert_eq!(clear.len(), 88);
+        assert!(clear.iter().all(|&p| p == [0, 0, 0]));
+
+        let fill_full = build_station2_preset_frame("fill", [200, 100, 50], 255);
+        assert_eq!(fill_full.len(), 88);
+        assert!(fill_full.iter().all(|&p| p == [200, 100, 50]));
+
+        let fill_zero = build_station2_preset_frame("fill", [200, 100, 50], 0);
+        assert!(fill_zero.iter().all(|&p| p == [0, 0, 0]));
+
+        let fill_half = build_station2_preset_frame("fill", [200, 100, 50], 128);
+        assert_eq!(fill_half[0], scale_rgb_brightness([200, 100, 50], 128));
+        assert!(fill_half[0][0] > 95 && fill_half[0][0] < 105);
+
+        let wave = build_station2_preset_frame("wave", [0x6B, 0x0F, 0xFF], 255);
+        assert_eq!(wave.len(), 88);
+        assert!(wave.iter().any(|&p| p != [0, 0, 0]));
+        assert_eq!(wave[0], [0, 0, 0]);
+        assert!(wave[7 * 11 + 5][2] > 0);
+
+        let heart = build_station2_preset_frame("heart", [0x6B, 0x0F, 0xFF], 255);
+        assert_eq!(heart.len(), 88);
+        assert_eq!(heart[0], [0, 0, 0]);
+        assert_eq!(heart[10], [0, 0, 0]);
+        assert!(heart[3 * 11 + 5][0] > 200);
+        assert!(heart[7 * 11 + 5][0] > 200);
+
+        let rainbow = build_station2_preset_frame("rainbow", [0x6B, 0x0F, 0xFF], 255);
+        assert_eq!(rainbow.len(), 88);
+        assert!(rainbow.iter().all(|&p| p != [0, 0, 0]));
+        assert_ne!(rainbow[0], rainbow[5]);
+
+        let cmd = format_station2_frame_command(&fill_full);
+        assert!(cmd.starts_with("frame:c86432 "));
+        assert_eq!(cmd.trim_start_matches("frame:").split_whitespace().count(), 88);
     }
 }

@@ -1,8 +1,10 @@
 use crate::gui::canvas::{draw_circular_oknix_logo, draw_ring_led};
 use crate::gui::display_geom::{
-    clock_inspector_text, clock_segment_lines_for_board, clock_special_positions,
-    hit_test_clock_segment_for_board, hit_test_matrix_pixel, mango_battery_led_rgb,
-    matrix_inspector_text,
+    build_station2_preset_frame, clock_inspector_text, clock_segment_lines_for_board,
+    clock_special_positions, format_station2_frame_command, hit_test_clock_segment_for_board,
+    hit_test_matrix_pixel, hit_test_station2_faceplate_pixel, mango_battery_led_rgb,
+    matrix_inspector_text, scale_rgb_brightness, station2_faceplate_layout,
+    station2_faceplate_pixel_center, station2_panel_inspector_text,
 };
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
@@ -712,6 +714,392 @@ pub fn render_matrix_21x12_faceplate(
                 scale_brightness: Some(app.clock_brightness),
                 text: None,
             });
+        }
+    });
+}
+
+fn send_station2_custom_frame(app: &mut GuiAppState, st: &mut BridgeStateSnapshot) {
+    st.ring_pixels = app.station2_custom_pixels.clone();
+    let pattern = format_station2_frame_command(&app.station2_custom_pixels);
+    st.forced_led_pattern = pattern.clone();
+    let latest = app.latest_state.get_or_insert_with(|| st.clone());
+    latest.ring_pixels = app.station2_custom_pixels.clone();
+    latest.forced_led_pattern = pattern.clone();
+    app.selected_firmware_led_pattern.clear();
+    app.selected_led_pattern = pattern.clone();
+    app.send_command(HostCommand::SetLedPattern { pattern });
+}
+
+fn apply_station2_preset(app: &mut GuiAppState, st: &mut BridgeStateSnapshot, preset: &str) {
+    if preset != "clear" && app.clock_brightness == 0 {
+        app.clock_brightness = 255;
+    }
+    app.station2_base_pixels = build_station2_preset_frame(preset, app.station2_brush_rgb, 255);
+    let eff_br = if preset == "clear" {
+        0
+    } else {
+        app.clock_brightness
+    };
+    app.station2_custom_pixels =
+        build_station2_preset_frame(preset, app.station2_brush_rgb, eff_br);
+    send_station2_custom_frame(app, st);
+}
+
+fn build_station2_show_preview_frame(pat_id: &str, brightness: u8) -> Vec<[u8; 3]> {
+    let mut out = Vec::with_capacity(88);
+    for row in 0..8usize {
+        for col in 0..11usize {
+            let tx = (col as f32) / 10.0;
+            let ty = (row as f32) / 7.0;
+            let base = match pat_id {
+                "panel/candle.led" => [
+                    255,
+                    (90.0 + 95.0 * ty).round() as u8,
+                    (15.0 + 40.0 * ty * (1.0 - tx)).round() as u8,
+                ],
+                "panel/lavalamp.led" => [
+                    (220.0 + 35.0 * (1.0 - ty)).round() as u8,
+                    (25.0 + 110.0 * tx).round() as u8,
+                    (140.0 + 115.0 * ty).round() as u8,
+                ],
+                "panel/polar_lights.led" => [
+                    (20.0 + 95.0 * (1.0 - ty)).round() as u8,
+                    (175.0 + 80.0 * tx).round() as u8,
+                    (160.0 + 95.0 * ty).round() as u8,
+                ],
+                "panel/night_light.led" => [
+                    255,
+                    (155.0 + 35.0 * (1.0 - ty)).round() as u8,
+                    (55.0 + 25.0 * tx).round() as u8,
+                ],
+                _ => [
+                    (215.0 + 40.0 * (1.0 - tx)).round() as u8,
+                    (35.0 + 65.0 * ty).round() as u8,
+                    (145.0 + 110.0 * tx).round() as u8,
+                ],
+            };
+            out.push(scale_rgb_brightness(base, brightness));
+        }
+    }
+    out
+}
+
+pub fn render_station2_light_panel_faceplate(
+    ui: &mut egui::Ui,
+    app: &mut GuiAppState,
+    st: &mut BridgeStateSnapshot,
+    bridge_online: bool,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new("Верхняя световая панель 11×8 (/dev/fb0, gowin_led_device) (?)")
+                .small()
+                .strong()
+                .color(Color32::from_rgb(175, 190, 215)),
+        )
+        .on_hover_text(
+            "Полноцветная верхняя световая панель Яндекс Станции 2 (station2 / YNDX-00051):\n\
+             • Аппаратный драйвер: SPI FPGA Gowin (gowin_led_device) + фреймбуфер /dev/fb0 (88 RGB24 пикселей, 264 байта)\n\
+             • Поканальное управление sysfs: /sys/class/leds/station2:{red,green,blue}:ring0..87/brightness (0..255)\n\
+             • Штатные полноцветные анимации панели: /system/vendor/quasar/ledpatterns/panel/*.led",
+        );
+
+        ui.add(
+            egui::Button::new(
+                RichText::new("ВИД СВЕРХУ (КРЫШКА) · Фронтального экрана нет")
+                    .small()
+                    .strong()
+                    .color(Color32::from_rgb(255, 215, 120)),
+            )
+            .fill(Color32::from_rgb(58, 44, 20))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(135, 100, 42)))
+            .rounding(99.0)
+            .sense(Sense::hover()),
+        )
+        .on_hover_text(
+            "На Яндекс Станции 2 (station2) физически отсутствует боковой/фронтальный дисплей.\n\
+             Этот блок представляет собой увеличенную проекцию («лупу») верхней горизонтальной крышки колонки\n\
+             прямо под сенсорной планкой [ − ] [ ○ ] [ + ] для удобного попиксельного RGB-рисования и запуска шоу.",
+        );
+
+        ui.separator();
+        ui.label(
+            RichText::new("ЛКМ: рисовать | ПКМ: стирать")
+                .small()
+                .color(Color32::from_rgb(130, 195, 255)),
+        );
+        ui.separator();
+        ui.label(
+            RichText::new(format!("PWM: {}", app.clock_brightness))
+                .small()
+                .monospace()
+                .color(Color32::from_rgb(155, 175, 200)),
+        );
+    });
+
+    if app.station2_custom_pixels.len() < 88 {
+        app.station2_custom_pixels
+            .resize(88, scale_rgb_brightness(app.station2_brush_rgb, app.clock_brightness));
+    }
+    if app.station2_base_pixels.len() < 88 {
+        app.station2_base_pixels
+            .resize(88, app.station2_brush_rgb);
+    }
+
+    if bridge_online && st.ring_pixels.len() >= 88 && !st.forced_led_pattern.starts_with("frame:") {
+        app.station2_custom_pixels.truncate(88);
+        app.station2_base_pixels.truncate(88);
+        app.station2_custom_pixels.copy_from_slice(&st.ring_pixels[..88]);
+        app.station2_base_pixels.copy_from_slice(&st.ring_pixels[..88]);
+    } else if !bridge_online && st.ring_pixels.len() < 88 {
+        st.ring_pixels = app.station2_custom_pixels.clone();
+    }
+
+    let canvas_size = Vec2::new(ui.available_width().max(260.0), 174.0);
+    let (outer_rect, resp) = ui.allocate_exact_size(canvas_size, Sense::click_and_drag());
+    let layout = station2_faceplate_layout(outer_rect);
+
+    let hover_pos = resp
+        .hover_pos()
+        .or_else(|| resp.interact_pointer_pos());
+    let hovered_idx = if resp.hovered() || resp.dragged() {
+        hover_pos
+            .and_then(|p| hit_test_station2_faceplate_pixel(layout.grid_rect, layout.cell_size, p))
+    } else {
+        None
+    };
+    if hovered_idx.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    if let Some((ptr, draw_mode)) = pointer_draw_erase_mode(ui, &resp) {
+        if let Some(idx) =
+            hit_test_station2_faceplate_pixel(layout.grid_rect, layout.cell_size, ptr)
+        {
+            if draw_mode && app.clock_brightness == 0 {
+                app.clock_brightness = 255;
+            }
+            let next_base = if draw_mode {
+                app.station2_brush_rgb
+            } else {
+                [0, 0, 0]
+            };
+            let next_scaled = if draw_mode {
+                scale_rgb_brightness(app.station2_brush_rgb, app.clock_brightness.max(1))
+            } else {
+                [0, 0, 0]
+            };
+            if app.station2_custom_pixels[idx] != next_scaled
+                || app.station2_base_pixels[idx] != next_base
+            {
+                app.station2_base_pixels[idx] = next_base;
+                app.station2_custom_pixels[idx] = next_scaled;
+                send_station2_custom_frame(app, st);
+            }
+        }
+    }
+
+    let painter = ui.painter_at(outer_rect);
+    painter.rect_filled(outer_rect, 8.0, Color32::from_rgb(17, 20, 27));
+    painter.rect_stroke(
+        outer_rect,
+        8.0,
+        Stroke::new(1.2, Color32::from_rgb(56, 64, 80)),
+    );
+
+    // Верхний ориентир крышки: силуэт сенсорной планки [ − ]   [ ○ ]   [ + ]
+    painter.rect_filled(layout.strip_rect, 7.0, Color32::from_rgb(12, 15, 21));
+    painter.rect_stroke(
+        layout.strip_rect,
+        7.0,
+        Stroke::new(1.0, Color32::from_rgb(42, 50, 64)),
+    );
+    let icon_fg = Color32::from_rgb(138, 152, 174);
+    let icon_stroke = Stroke::new(1.5, icon_fg);
+    for bpos in [layout.minus_pos, layout.action_pos, layout.plus_pos] {
+        painter.circle_filled(bpos, 7.2, Color32::from_rgb(18, 22, 30));
+        painter.circle_stroke(bpos, 7.2, Stroke::new(1.0, Color32::from_rgb(52, 60, 76)));
+    }
+    painter.line_segment(
+        [
+            Pos2::new(layout.minus_pos.x - 3.2, layout.minus_pos.y),
+            Pos2::new(layout.minus_pos.x + 3.2, layout.minus_pos.y),
+        ],
+        icon_stroke,
+    );
+    painter.circle_stroke(layout.action_pos, 3.0, icon_stroke);
+    painter.line_segment(
+        [
+            Pos2::new(layout.plus_pos.x - 3.2, layout.plus_pos.y),
+            Pos2::new(layout.plus_pos.x + 3.2, layout.plus_pos.y),
+        ],
+        icon_stroke,
+    );
+    painter.line_segment(
+        [
+            Pos2::new(layout.plus_pos.x, layout.plus_pos.y - 3.2),
+            Pos2::new(layout.plus_pos.x, layout.plus_pos.y + 3.2),
+        ],
+        icon_stroke,
+    );
+
+    // Крупная световая панель 11×8 (88 RGBW LED, /dev/fb0) под сенсорной планкой
+    painter.rect_filled(layout.panel_rect, 6.0, Color32::from_rgb(11, 14, 19));
+    painter.rect_stroke(
+        layout.panel_rect,
+        6.0,
+        Stroke::new(1.0, Color32::from_rgb(40, 48, 60)),
+    );
+
+    let dot_r = (layout.cell_size * 0.30).clamp(4.0, 5.2);
+    for row in 0..8usize {
+        for col in 0..11usize {
+            let idx = row * 11 + col;
+            let rgb = app
+                .station2_custom_pixels
+                .get(idx)
+                .copied()
+                .unwrap_or([0, 0, 0]);
+            let pos =
+                station2_faceplate_pixel_center(layout.grid_rect, layout.cell_size, col, row);
+            if hovered_idx == Some(idx) {
+                painter.circle_stroke(
+                    pos,
+                    dot_r + 2.4,
+                    Stroke::new(1.4, Color32::from_rgb(95, 195, 255)),
+                );
+            }
+            draw_ring_led(&painter, pos, dot_r, rgb);
+        }
+    }
+
+    let inspector_line = station2_panel_inspector_text(
+        hovered_idx,
+        &app.station2_custom_pixels,
+        app.station2_brush_rgb,
+        app.clock_brightness,
+    );
+    render_display_inspector_bar(ui, &inspector_line, hovered_idx.is_some());
+
+    // Строка 1: Палитра RGB-кисти, 5 фирменных свотчей, Залить / Погасить
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Кисть:").small());
+        ui.color_edit_button_srgb(&mut app.station2_brush_rgb);
+        for (lbl, swatch_rgb, hex_code) in [
+            ("Фиолетовый", [0x6B, 0x0F, 0xFF], "#6B0FFF"),
+            ("Алиса Про", [0x00, 0xFF, 0x80], "#00FF80"),
+            ("Бирюзовый", [0x00, 0xE5, 0xFF], "#00E5FF"),
+            ("Свеча", [0xFF, 0x99, 0x33], "#FF9933"),
+            ("Белый", [0xFF, 0xFF, 0xFF], "#FFFFFF"),
+        ] {
+            let is_selected = app.station2_brush_rgb == swatch_rgb;
+            let btn = egui::Button::new(
+                RichText::new(lbl).small().color(if is_selected {
+                    Color32::WHITE
+                } else {
+                    Color32::from_rgb(205, 215, 230)
+                }),
+            )
+            .stroke(Stroke::new(
+                if is_selected { 1.5 } else { 1.0 },
+                Color32::from_rgb(swatch_rgb[0], swatch_rgb[1], swatch_rgb[2]),
+            ));
+            if ui
+                .add(btn)
+                .on_hover_text(format!("Выбрать цвет кисти {lbl} ({hex_code})"))
+                .clicked()
+            {
+                app.station2_brush_rgb = swatch_rgb;
+            }
+        }
+        ui.separator();
+        if ui
+            .small_button("Залить")
+            .on_hover_text("Залить все 88 светодиодов выбранным цветом кисти")
+            .clicked()
+        {
+            apply_station2_preset(app, st, "fill");
+        }
+        if ui
+            .small_button("Погасить")
+            .on_hover_text("Погасить все 88 светодиодов верхней панели (/dev/fb0)")
+            .clicked()
+        {
+            apply_station2_preset(app, st, "clear");
+        }
+    });
+
+    // Строка 2: Яркость PWM 0..255
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Яркость PWM:").small());
+        if ui
+            .add(egui::Slider::new(&mut app.clock_brightness, 0..=255))
+            .changed()
+        {
+            for idx in 0..88 {
+                let base = app
+                    .station2_base_pixels
+                    .get(idx)
+                    .copied()
+                    .unwrap_or([0, 0, 0]);
+                app.station2_custom_pixels[idx] =
+                    scale_rgb_brightness(base, app.clock_brightness);
+            }
+            send_station2_custom_frame(app, st);
+        }
+    });
+
+    // Строка 3: Процедурные RGB-фигуры и штатные фоновые шоу прошивки (panel/*.led)
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new("Фигуры:")
+                .small()
+                .color(Color32::from_rgb(155, 170, 190)),
+        );
+        for (lbl, preset) in [
+            ("Волна", "wave"),
+            ("Лайк ♥", "heart"),
+            ("Радуга", "rainbow"),
+        ] {
+            if ui.small_button(lbl).clicked() {
+                apply_station2_preset(app, st, preset);
+            }
+        }
+        ui.separator();
+        ui.label(
+            RichText::new("Шоу panel/*.led:")
+                .small()
+                .color(Color32::from_rgb(155, 170, 190)),
+        );
+        for (lbl, pat_id) in [
+            ("Свеча", "panel/candle.led"),
+            ("Лава-лампа", "panel/lavalamp.led"),
+            ("Сияние", "panel/polar_lights.led"),
+            ("Ночник", "panel/night_light.led"),
+            ("Романтика", "panel/romantic.led"),
+        ] {
+            let active = app.selected_firmware_led_pattern == pat_id;
+            let btn = egui::Button::new(RichText::new(lbl).small()).selected(active);
+            if ui
+                .add(btn)
+                .on_hover_text(format!(
+                    "Запустить штатную фоновую анимацию /system/vendor/quasar/ledpatterns/{pat_id}"
+                ))
+                .clicked()
+            {
+                if app.clock_brightness == 0 {
+                    app.clock_brightness = 255;
+                }
+                app.station2_base_pixels = build_station2_show_preview_frame(pat_id, 255);
+                app.station2_custom_pixels =
+                    build_station2_show_preview_frame(pat_id, app.clock_brightness);
+                st.ring_pixels = app.station2_custom_pixels.clone();
+                st.forced_led_pattern = pat_id.to_string();
+                let latest = app.latest_state.get_or_insert_with(|| st.clone());
+                latest.ring_pixels = app.station2_custom_pixels.clone();
+                latest.forced_led_pattern = pat_id.to_string();
+                app.apply_firmware_led_pattern(pat_id);
+            }
         }
     });
 }

@@ -245,6 +245,14 @@ fn parse_rgb_hex_pattern(forced: &str) -> Option<[u8; 3]> {
     ])
 }
 
+pub fn parse_rgb_frame_pattern(forced: &str, ring_leds: usize) -> Option<Vec<[u8; 3]>> {
+    let raw_tokens = forced.trim().strip_prefix("frame:")?;
+    parse_led_pattern_str(raw_tokens, ring_leds)
+        .into_iter()
+        .next()
+        .map(|(px, _)| px)
+}
+
 fn apply_native_frames(state: &BridgeState, ring_px: Vec<[u8; 3]>, aux_px: Option<Vec<[u8; 3]>>) {
     state.peripherals.ring.write_native_frame(&ring_px);
     *state.native_led_frame.lock().unwrap() = ring_px;
@@ -284,6 +292,10 @@ pub fn sync_immediate_led_state(state: &BridgeState) {
                 None
             };
             apply_native_frames(state, vec![c; ring_leds], aux);
+            return;
+        }
+        if let Some(px) = parse_rgb_frame_pattern(&forced, ring_leds) {
+            apply_native_frames(state, px, None);
             return;
         }
         let frames = load_led_pattern(&forced, ring_leds);
@@ -378,6 +390,11 @@ pub fn spawn_native_led_animator(state: Arc<BridgeState>) {
                         None
                     };
                     apply_native_frames(&state, vec![c; ring_leds], aux);
+                    thread::sleep(Duration::from_millis(60));
+                    continue;
+                }
+                if let Some(px) = parse_rgb_frame_pattern(&forced, ring_leds) {
+                    apply_native_frames(&state, px, None);
                     thread::sleep(Duration::from_millis(60));
                     continue;
                 }
@@ -510,5 +527,31 @@ mod tests {
         assert_eq!(parse_rgb_hex_pattern("rgb:#00E5FF"), Some([0x00, 0xE5, 0xFF]));
         assert_eq!(parse_rgb_hex_pattern("rgb:ff1020"), Some([0xFF, 0x10, 0x20]));
         assert_eq!(parse_rgb_hex_pattern("listening"), None);
+    }
+
+    #[test]
+    fn test_parse_rgb_frame_pattern_station2_88_leds() {
+        let mut tokens = Vec::with_capacity(88);
+        for i in 0..88usize {
+            if i == 0 {
+                tokens.push("6b0fff".to_string());
+            } else if i == 1 {
+                tokens.push("00ff80".to_string());
+            } else if i == 87 {
+                tokens.push("ff9933".to_string());
+            } else {
+                tokens.push(format!("{:02x}{:02x}{:02x}", i as u8, (i * 2) as u8, 255 - i as u8));
+            }
+        }
+        let cmd = format!("frame:{}", tokens.join(" "));
+        let parsed = parse_rgb_frame_pattern(&cmd, 88).expect("should parse 88-LED frame");
+        assert_eq!(parsed.len(), 88);
+        assert_eq!(parsed[0], [0x6B, 0x0F, 0xFF]);
+        assert_eq!(parsed[1], [0x00, 0xFF, 0x80]);
+        assert_eq!(parsed[87], [0xFF, 0x99, 0x33]);
+
+        assert_eq!(parse_rgb_frame_pattern("rgb:#6B0FFF", 88), None);
+        assert_eq!(parse_rgb_frame_pattern("panel/candle.led", 88), None);
+        assert_eq!(parse_rgb_frame_pattern("frame:", 88), None);
     }
 }

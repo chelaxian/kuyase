@@ -134,6 +134,9 @@ pub struct GuiAppState {
     pub matrix_text_input: String,
     pub matrix_custom_pixels: Vec<u8>,
     pub matrix_active_mask: Vec<bool>,
+    pub station2_custom_pixels: Vec<[u8; 3]>,
+    pub station2_base_pixels: Vec<[u8; 3]>,
+    pub station2_brush_rgb: [u8; 3],
     pub doa_slider: u32,
     pub tof_slider: u32,
     pub als_slider: u32,
@@ -226,6 +229,17 @@ impl GuiAppState {
                 .into_iter()
                 .map(|v| v > 0)
                 .collect(),
+            station2_custom_pixels: crate::gui::display_geom::build_station2_preset_frame(
+                "wave",
+                [0x6B, 0x0F, 0xFF],
+                255,
+            ),
+            station2_base_pixels: crate::gui::display_geom::build_station2_preset_frame(
+                "wave",
+                [0x6B, 0x0F, 0xFF],
+                255,
+            ),
+            station2_brush_rgb: [0x6B, 0x0F, 0xFF],
             doa_slider: 90,
             tof_slider: 8190,
             als_slider: 240,
