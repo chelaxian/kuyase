@@ -183,6 +183,8 @@ impl GuiAppState {
     pub fn new(root_dir: &Path) -> Self {
         let config = Self::load_config(root_dir);
         let audio_player = HostAudioPlayer::new(config.audio_muted);
+        let station2_wave_frame =
+            crate::gui::display_geom::build_station2_preset_frame("wave", [0x6B, 0x0F, 0xFF], 255);
         let mut app = Self {
             root_dir: root_dir.to_path_buf(),
             config,
@@ -229,16 +231,8 @@ impl GuiAppState {
                 .into_iter()
                 .map(|v| v > 0)
                 .collect(),
-            station2_custom_pixels: crate::gui::display_geom::build_station2_preset_frame(
-                "wave",
-                [0x6B, 0x0F, 0xFF],
-                255,
-            ),
-            station2_base_pixels: crate::gui::display_geom::build_station2_preset_frame(
-                "wave",
-                [0x6B, 0x0F, 0xFF],
-                255,
-            ),
+            station2_custom_pixels: station2_wave_frame.clone(),
+            station2_base_pixels: station2_wave_frame,
             station2_brush_rgb: [0x6B, 0x0F, 0xFF],
             doa_slider: 90,
             tof_slider: 8190,

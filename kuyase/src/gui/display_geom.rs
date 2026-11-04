@@ -982,7 +982,6 @@ pub fn hit_test_matrix_pixel(rect: Rect, cell: f32, pointer: Pos2) -> Option<usi
 
 #[derive(Debug, Clone, Copy)]
 pub struct Station2FaceplateLayout {
-    pub outer_rect: Rect,
     pub panel_rect: Rect,
     pub grid_rect: Rect,
     pub cell_size: f32,
@@ -1002,7 +1001,6 @@ pub fn station2_faceplate_layout(outer_rect: Rect) -> Station2FaceplateLayout {
     let panel_rect = grid_rect.expand(4.0);
 
     Station2FaceplateLayout {
-        outer_rect,
         panel_rect,
         grid_rect,
         cell_size,
@@ -1046,7 +1044,7 @@ pub fn station2_panel_inspector_text(
     brush_rgb: [u8; 3],
     brightness: u8,
 ) -> String {
-    if let Some(idx) = hovered_idx.filter(|&i| i < STATION2_PANEL_COLS * STATION2_PANEL_ROWS) {
+    if let Some(idx) = hovered_idx.filter(|&i| i < STATION2_PANEL_LEDS) {
         let col = idx % STATION2_PANEL_COLS;
         let row = idx / STATION2_PANEL_COLS;
         let [r, g, b] = pixels.get(idx).copied().unwrap_or([0, 0, 0]);
@@ -1066,8 +1064,15 @@ pub fn scale_rgb_brightness(rgb: [u8; 3], brightness: u8) -> [u8; 3] {
     [scale(rgb[0]), scale(rgb[1]), scale(rgb[2])]
 }
 
+pub fn scale_station2_frame_brightness(base_pixels: &[[u8; 3]], brightness: u8) -> Vec<[u8; 3]> {
+    base_pixels
+        .iter()
+        .map(|&rgb| scale_rgb_brightness(rgb, brightness))
+        .collect()
+}
+
 pub fn format_station2_frame_command(pixels: &[[u8; 3]]) -> String {
-    let total = STATION2_PANEL_COLS * STATION2_PANEL_ROWS;
+    let total = STATION2_PANEL_LEDS;
     let mut out = String::with_capacity(6 + total * 7);
     out.push_str("frame:");
     for idx in 0..total {
@@ -1110,7 +1115,7 @@ pub fn build_station2_preset_frame(
     brush_rgb: [u8; 3],
     brightness: u8,
 ) -> Vec<[u8; 3]> {
-    let total = STATION2_PANEL_COLS * STATION2_PANEL_ROWS;
+    let total = STATION2_PANEL_LEDS;
     match preset.trim().to_ascii_lowercase().as_str() {
         "clear" => vec![[0, 0, 0]; total],
         "fill" => vec![scale_rgb_brightness(brush_rgb, brightness); total],
@@ -1688,7 +1693,7 @@ mod tests {
         }
 
         // 3. Inspector bar text for hovered pixel and None
-        let mut px = vec![[0u8; 3]; 88];
+        let mut px = vec![[0u8; 3]; STATION2_PANEL_LEDS];
         px[0] = [0x6B, 0x0F, 0xFF];
         px[87] = [0x00, 0xFF, 0x80];
         let hov0 = station2_panel_inspector_text(Some(0), &px, [0x6B, 0x0F, 0xFF], 255);
@@ -1724,8 +1729,7 @@ mod tests {
         assert!(fill_zero.iter().all(|&p| p == [0, 0, 0]));
 
         let fill_half = build_station2_preset_frame("fill", [200, 100, 50], 128);
-        assert_eq!(fill_half[0], scale_rgb_brightness([200, 100, 50], 128));
-        assert!(fill_half[0][0] > 95 && fill_half[0][0] < 105);
+        assert_eq!(fill_half[0], [100, 50, 25]);
 
         let wave = build_station2_preset_frame("wave", [0x6B, 0x0F, 0xFF], 255);
         assert_eq!(wave.len(), 88);

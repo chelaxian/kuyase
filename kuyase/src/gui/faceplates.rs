@@ -3,9 +3,9 @@ use crate::gui::display_geom::{
     build_station2_preset_frame, clock_inspector_text, clock_segment_lines_for_board,
     clock_special_positions, format_station2_frame_command, hit_test_clock_segment_for_board,
     hit_test_matrix_pixel, hit_test_station2_faceplate_pixel, mango_battery_led_rgb,
-    matrix_inspector_text, scale_rgb_brightness, station2_faceplate_layout,
-    station2_faceplate_pixel_center, station2_panel_inspector_text, STATION2_PANEL_COLS,
-    STATION2_PANEL_LEDS, STATION2_PANEL_ROWS,
+    matrix_inspector_text, scale_rgb_brightness, scale_station2_frame_brightness,
+    station2_faceplate_layout, station2_faceplate_pixel_center, station2_panel_inspector_text,
+    STATION2_PANEL_COLS, STATION2_PANEL_LEDS, STATION2_PANEL_ROWS,
 };
 use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
@@ -719,19 +719,15 @@ pub fn render_matrix_21x12_faceplate(
     });
 }
 
-fn send_station2_custom_frame(app: &mut GuiAppState, st: &mut BridgeStateSnapshot) {
-    st.ring_pixels = app.station2_custom_pixels.clone();
+fn send_station2_custom_frame(app: &mut GuiAppState, st: &BridgeStateSnapshot) {
     let pattern = format_station2_frame_command(&app.station2_custom_pixels);
-    st.forced_led_pattern = pattern.clone();
     let latest = app.latest_state.get_or_insert_with(|| st.clone());
     latest.ring_pixels = app.station2_custom_pixels.clone();
     latest.forced_led_pattern = pattern.clone();
-    app.selected_firmware_led_pattern.clear();
-    app.selected_led_pattern = pattern.clone();
-    app.send_command(HostCommand::SetLedPattern { pattern });
+    app.apply_preset_led_pattern(&pattern);
 }
 
-fn apply_station2_preset(app: &mut GuiAppState, st: &mut BridgeStateSnapshot, preset: &str) {
+fn apply_station2_preset(app: &mut GuiAppState, st: &BridgeStateSnapshot, preset: &str) {
     if preset != "clear" && app.clock_brightness == 0 {
         app.clock_brightness = 255;
     }
@@ -742,16 +738,16 @@ fn apply_station2_preset(app: &mut GuiAppState, st: &mut BridgeStateSnapshot, pr
         app.clock_brightness
     };
     app.station2_custom_pixels =
-        build_station2_preset_frame(preset, app.station2_brush_rgb, eff_br);
+        scale_station2_frame_brightness(&app.station2_base_pixels, eff_br);
     send_station2_custom_frame(app, st);
 }
 
-fn build_station2_show_preview_frame(pat_id: &str, brightness: u8) -> Vec<[u8; 3]> {
+fn build_station2_show_preview_frame(pat_id: &str) -> Vec<[u8; 3]> {
     let mut out = Vec::with_capacity(STATION2_PANEL_LEDS);
     for row in 0..STATION2_PANEL_ROWS {
         for col in 0..STATION2_PANEL_COLS {
-            let tx = (col as f32) / 10.0;
-            let ty = (row as f32) / 7.0;
+            let tx = (col as f32) / ((STATION2_PANEL_COLS - 1) as f32);
+            let ty = (row as f32) / ((STATION2_PANEL_ROWS - 1) as f32);
             let base = match pat_id {
                 "panel/candle.led" => [
                     255,
@@ -779,7 +775,7 @@ fn build_station2_show_preview_frame(pat_id: &str, brightness: u8) -> Vec<[u8; 3
                     (145.0 + 110.0 * tx).round() as u8,
                 ],
             };
-            out.push(scale_rgb_brightness(base, brightness));
+            out.push(base);
         }
     }
     out
@@ -788,7 +784,7 @@ fn build_station2_show_preview_frame(pat_id: &str, brightness: u8) -> Vec<[u8; 3
 pub fn render_station2_light_panel_faceplate(
     ui: &mut egui::Ui,
     app: &mut GuiAppState,
-    st: &mut BridgeStateSnapshot,
+    st: &BridgeStateSnapshot,
     bridge_online: bool,
 ) {
     ui.horizontal_wrapped(|ui| {
@@ -838,29 +834,14 @@ pub fn render_station2_light_panel_faceplate(
         );
     });
 
-    if app.station2_custom_pixels.len() < STATION2_PANEL_LEDS {
-        app.station2_custom_pixels.resize(
-            STATION2_PANEL_LEDS,
-            scale_rgb_brightness(app.station2_brush_rgb, app.clock_brightness),
-        );
-    }
-    if app.station2_base_pixels.len() < STATION2_PANEL_LEDS {
-        app.station2_base_pixels
-            .resize(STATION2_PANEL_LEDS, app.station2_brush_rgb);
-    }
-
     if bridge_online
         && st.ring_pixels.len() >= STATION2_PANEL_LEDS
         && !st.forced_led_pattern.starts_with("frame:")
     {
-        app.station2_custom_pixels.truncate(STATION2_PANEL_LEDS);
-        app.station2_base_pixels.truncate(STATION2_PANEL_LEDS);
         app.station2_custom_pixels
             .copy_from_slice(&st.ring_pixels[..STATION2_PANEL_LEDS]);
         app.station2_base_pixels
             .copy_from_slice(&st.ring_pixels[..STATION2_PANEL_LEDS]);
-    } else if !bridge_online && st.ring_pixels.len() < STATION2_PANEL_LEDS {
-        st.ring_pixels = app.station2_custom_pixels.clone();
     }
 
     let canvas_size = Vec2::new(ui.available_width().max(260.0), 146.0);
@@ -1008,15 +989,8 @@ pub fn render_station2_light_panel_faceplate(
             .add(egui::Slider::new(&mut app.clock_brightness, 0..=255))
             .changed()
         {
-            for idx in 0..STATION2_PANEL_LEDS {
-                let base = app
-                    .station2_base_pixels
-                    .get(idx)
-                    .copied()
-                    .unwrap_or([0, 0, 0]);
-                app.station2_custom_pixels[idx] =
-                    scale_rgb_brightness(base, app.clock_brightness);
-            }
+            app.station2_custom_pixels =
+                scale_station2_frame_brightness(&app.station2_base_pixels, app.clock_brightness);
             send_station2_custom_frame(app, st);
         }
     });
@@ -1062,11 +1036,11 @@ pub fn render_station2_light_panel_faceplate(
                 if app.clock_brightness == 0 {
                     app.clock_brightness = 255;
                 }
-                app.station2_base_pixels = build_station2_show_preview_frame(pat_id, 255);
-                app.station2_custom_pixels =
-                    build_station2_show_preview_frame(pat_id, app.clock_brightness);
-                st.ring_pixels = app.station2_custom_pixels.clone();
-                st.forced_led_pattern = pat_id.to_string();
+                app.station2_base_pixels = build_station2_show_preview_frame(pat_id);
+                app.station2_custom_pixels = scale_station2_frame_brightness(
+                    &app.station2_base_pixels,
+                    app.clock_brightness,
+                );
                 let latest = app.latest_state.get_or_insert_with(|| st.clone());
                 latest.ring_pixels = app.station2_custom_pixels.clone();
                 latest.forced_led_pattern = pat_id.to_string();

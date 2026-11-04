@@ -268,11 +268,7 @@ fn render_mango_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
         },
     );
 
-    let (trig, conflicts) = app
-        .latest_state
-        .as_ref()
-        .map(|s| (s.ring_trigger.clone(), s.led_trigger_conflict_count))
-        .unwrap_or_else(|| ("ledfb-ring (Quasar Native)".to_string(), 0));
+    let (trig, conflicts) = ring_trigger_telemetry(app);
     gnome_action_row(
         ui,
         "4-LED шкала заряда (/dev/fb0 + mango:*:ring1..4) и 3-LED логотип oknix (/dev/fb1 + mango:*:logo0..2)",
@@ -351,18 +347,11 @@ fn render_pickle_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
         },
     );
 
-    let (trig, conflicts) = app
-        .latest_state
-        .as_ref()
-        .map(|s| (s.ring_trigger.clone(), s.led_trigger_conflict_count))
-        .unwrap_or_else(|| ("ledfb-ring (Quasar Native)".to_string(), 0));
+    let subtitle = ring_trigger_conflict_subtitle(app);
     gnome_action_row(
         ui,
         "Контурное кольцо 16 LED (/dev/fb0) + Центральный круговой логотип oknix 6 LED (/dev/fb1)",
-        &format!(
-            "Активный триггер: {} | Отклонено записей sysfs при [ledfb-ring] (Trigger Conflict): {}",
-            trig, conflicts
-        ),
+        &subtitle,
         true,
         |ui| {
             if ui.button("Алиса Про (#00FF80 + #6B0FFF)").clicked() {
@@ -390,18 +379,11 @@ fn render_pickle_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
 
 fn render_station2_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
     let vm_on = app.session.is_some();
-    let (trig, conflicts) = app
-        .latest_state
-        .as_ref()
-        .map(|s| (s.ring_trigger.clone(), s.led_trigger_conflict_count))
-        .unwrap_or_else(|| ("ledfb-ring (Quasar Native)".to_string(), 0));
+    let subtitle = ring_trigger_conflict_subtitle(app);
     gnome_action_row(
         ui,
         "Верхняя световая панель 88 RGBW LED (/dev/fb0, SPI FPGA gowin_led_device + station2:*:ring0..87)",
-        &format!(
-            "Активный триггер: {} | Отклонено записей sysfs при [ledfb-ring] (Trigger Conflict): {}",
-            trig, conflicts
-        ),
+        &subtitle,
         false,
         |ui| {
             for (lbl, pat) in [
@@ -492,6 +474,21 @@ fn render_station2_card_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
     );
 }
 
+fn ring_trigger_telemetry(app: &GuiAppState) -> (String, u32) {
+    app.latest_state
+        .as_ref()
+        .map(|s| (s.ring_trigger.clone(), s.led_trigger_conflict_count))
+        .unwrap_or_else(|| ("ledfb-ring (Quasar Native)".to_string(), 0))
+}
+
+fn ring_trigger_conflict_subtitle(app: &GuiAppState) -> String {
+    let (trig, conflicts) = ring_trigger_telemetry(app);
+    format!(
+        "Активный триггер: {} | Отклонено записей sysfs при [ledfb-ring] (Trigger Conflict): {}",
+        trig, conflicts
+    )
+}
+
 fn render_sysfs_ring_action_buttons(ui: &mut egui::Ui, app: &mut GuiAppState, vm_on: bool) {
     if ui.button("Бирюзовый (#00E5FF)").clicked() {
         app.apply_preset_led_pattern("rgb:#00E5FF");
@@ -522,19 +519,12 @@ fn render_sysfs_ring_action_buttons(ui: &mut egui::Ui, app: &mut GuiAppState, vm
 }
 
 fn render_generic_sysfs_ring_rows(ui: &mut egui::Ui, app: &mut GuiAppState) {
-    let (trig, conflicts) = app
-        .latest_state
-        .as_ref()
-        .map(|s| (s.ring_trigger.clone(), s.led_trigger_conflict_count))
-        .unwrap_or_else(|| ("ledfb-ring (Quasar Native)".to_string(), 0));
+    let subtitle = ring_trigger_conflict_subtitle(app);
     let vm_on = app.session.is_some();
     gnome_action_row(
         ui,
         "Драйвер светового кольца (sysfs / ledfb-ring)",
-        &format!(
-            "Активный триггер: {} | Отклонено записей sysfs при [ledfb-ring] (Trigger Conflict): {}",
-            trig, conflicts
-        ),
+        &subtitle,
         true,
         |ui| {
             render_sysfs_ring_action_buttons(ui, app, vm_on);

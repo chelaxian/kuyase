@@ -3,7 +3,8 @@ use crate::gui::display_geom::{
     enclosure_button_pos, enclosure_hover_inspector_text, hit_test_enclosure_target,
     led_ring_position, mango_battery_led_rgb, mango_enclosure_layout, orion_ambilight_led_pos,
     orion_ring_led_pos, station2_light_panel_dot_pos, station2_light_panel_rect, CirclePuckSubtype,
-    EnclosureHitTarget, EnclosureShape,
+    EnclosureHitTarget, EnclosureShape, STATION2_PANEL_COLS, STATION2_PANEL_LEDS,
+    STATION2_PANEL_ROWS,
 };
 use crate::gui::faceplates::{
     render_aux_logo_strip, render_display_inspector_bar, render_matrix_21x12_faceplate,
@@ -763,9 +764,9 @@ fn render_rect_light_panel_enclosure(
         Stroke::new(1.0, Color32::from_rgb(40, 48, 60)),
     );
 
-    for row in 0..8usize {
-        for col in 0..11usize {
-            let idx = row * 11 + col;
+    for row in 0..STATION2_PANEL_ROWS {
+        for col in 0..STATION2_PANEL_COLS {
+            let idx = row * STATION2_PANEL_COLS + col;
             let rgb = st.ring_pixels.get(idx).copied().unwrap_or([95, 45, 220]);
             let pos = station2_light_panel_dot_pos(grid_rect, col, row);
             draw_ring_led(painter, pos, 2.7, rgb);
@@ -1003,7 +1004,7 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
         st.tof_mm = app.tof_slider;
         st.doa_angle = app.doa_slider;
         st.volume_level = app.volume_slider;
-        if board_slug == "station2" && st.ring_pixels.len() < 88 {
+        if board_slug == "station2" && st.ring_pixels.len() < STATION2_PANEL_LEDS {
             st.ring_pixels = app.station2_custom_pixels.clone();
         }
     }
@@ -1417,7 +1418,7 @@ pub fn render_twin_canvas(ui: &mut egui::Ui, app: &mut GuiAppState) {
                         } else if board_has_segment_clock(&board_slug, st.has_clock, &st.display_kind) {
                             render_segment_clock_faceplate(ui, app, &board_slug, &st, bridge_online);
                         } else if board_slug == "station2" {
-                            render_station2_light_panel_faceplate(ui, app, &mut st, bridge_online);
+                            render_station2_light_panel_faceplate(ui, app, &st, bridge_online);
                         } else if board_slug == "mango" {
                             ui.label(
                                 RichText::new(
