@@ -10,15 +10,9 @@ pub fn render_board_specific_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
         .map(|s| s.board_slug.clone())
         .unwrap_or_else(|| app.config.selected_board.clone());
     let desc = protocol::find_board_descriptor(&board_slug);
-    let has_ultrasound = desc
-        .map(|d| d.has_ultrasound)
-        .unwrap_or(board_slug == "orion");
-    let is_sn3236 = desc
-        .map(|d| d.ring_driver == "i2c_sn3236")
-        .unwrap_or(board_slug == "yandexmini");
-    let has_battery = desc
-        .map(|d| d.has_battery)
-        .unwrap_or(board_slug == "mango");
+    let has_ultrasound = desc.map(|d| d.has_ultrasound).unwrap_or(false);
+    let is_sn3236 = desc.map(|d| d.ring_driver == "i2c_sn3236").unwrap_or(false);
+    let has_battery = desc.map(|d| d.has_battery).unwrap_or(false);
 
     let title = format!("3. Специфичная периферия платы ({})", board_slug);
     gnome_preferences_group(

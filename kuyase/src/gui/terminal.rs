@@ -611,18 +611,6 @@ fn render_serial_console_tab(ui: &mut egui::Ui, app: &mut GuiAppState) {
         }
     }
 
-    ui.ctx().memory_mut(|m| {
-        m.set_focus_lock_filter(
-            term_id,
-            egui::EventFilter {
-                tab: true,
-                horizontal_arrows: true,
-                vertical_arrows: true,
-                escape: true,
-            },
-        );
-    });
-
     if has_focus && vm_running {
         let cursor_rect = active_cursor_rect.unwrap_or(term_rect);
         ui.ctx().output_mut(|o| {

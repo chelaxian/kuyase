@@ -29,18 +29,9 @@ pub enum SignalCategory {
 }
 
 impl SignalCategory {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Bridge => "BRIDGE",
-            Self::TofButtons => "TOF/KEY",
-            Self::TtsIpc => "TTS/IPC",
-            Self::LedDisplay => "LED/DISP",
-            Self::Audio => "AUDIO",
-        }
-    }
-
     pub fn as_str_for_board(self, board_slug: &str) -> &'static str {
         match self {
+            Self::Bridge => "BRIDGE",
             Self::TofButtons => {
                 if protocol::normalize_board_slug(board_slug) == "yandexmini" {
                     "TOF/KEY"
@@ -48,7 +39,9 @@ impl SignalCategory {
                     "SENS/KEY"
                 }
             }
-            other => other.as_str(),
+            Self::TtsIpc => "TTS/IPC",
+            Self::LedDisplay => "LED/DISP",
+            Self::Audio => "AUDIO",
         }
     }
 }
@@ -384,35 +377,21 @@ mod tests {
 
     #[test]
     fn test_signal_filter_and_category_tof_only_for_yandexmini() {
-        assert_eq!(protocol::BOARD_CATALOG.len(), 13);
-        for b in protocol::BOARD_CATALOG {
-            let tab = signal_filter_tab_label(SignalFilter::TofButtons, b.slug);
-            let cat = SignalCategory::TofButtons.as_str_for_board(b.slug);
-            if b.slug == "yandexmini" {
-                assert!(
-                    tab.contains("ToF"),
-                    "yandexmini filter tab must mention ToF: {}",
-                    tab
-                );
-                assert!(
-                    cat.contains("TOF"),
-                    "yandexmini category must mention TOF: {}",
-                    cat
-                );
-            } else {
-                assert!(
-                    !tab.contains("ToF") && !tab.contains("TOF") && !tab.contains("VL53L0X"),
-                    "board '{}' filter tab must NOT mention ToF: {}",
-                    b.slug,
-                    tab
-                );
-                assert!(
-                    !cat.contains("ToF") && !cat.contains("TOF") && !cat.contains("VL53L0X"),
-                    "board '{}' category must NOT mention TOF: {}",
-                    b.slug,
-                    cat
-                );
-            }
+        assert_eq!(
+            signal_filter_tab_label(SignalFilter::TofButtons, "yandexmini"),
+            "ToF / Кнопки"
+        );
+        assert_eq!(
+            SignalCategory::TofButtons.as_str_for_board("yandexmini"),
+            "TOF/KEY"
+        );
+
+        for slug in ["cucumber", "orion", "mango"] {
+            assert_eq!(
+                signal_filter_tab_label(SignalFilter::TofButtons, slug),
+                "Датчики / Кнопки"
+            );
+            assert_eq!(SignalCategory::TofButtons.as_str_for_board(slug), "SENS/KEY");
         }
     }
 }

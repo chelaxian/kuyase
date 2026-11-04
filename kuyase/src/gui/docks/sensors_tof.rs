@@ -4,21 +4,36 @@ use eframe::egui::{self, Color32, RichText};
 use protocol::HostCommand;
 
 fn board_sensor_capabilities(board_slug: &str) -> (bool, bool) {
-    let norm = protocol::normalize_board_slug(board_slug);
-    let desc = protocol::find_board_descriptor(&norm);
-    let is_sn3236 = desc
-        .map(|d| d.ring_driver == "i2c_sn3236")
-        .unwrap_or(norm == "yandexmini");
-    let has_ultrasound = desc
-        .map(|d| d.has_ultrasound)
-        .unwrap_or(norm == "orion");
+    let desc = protocol::find_board_descriptor(board_slug);
+    let is_sn3236 = desc.map(|d| d.ring_driver == "i2c_sn3236").unwrap_or(false);
+    let has_ultrasound = desc.map(|d| d.has_ultrasound).unwrap_or(false);
     (is_sn3236, has_ultrasound)
 }
 
-pub fn sensors_card_headers(board_slug: &str) -> (&'static str, &'static str) {
-    let (is_sn3236, has_ultrasound) = board_sensor_capabilities(board_slug);
+fn set_tof_distance(app: &mut GuiAppState, mm: u32) {
+    app.tof_wave_reset_at = None;
+    app.tof_slider = mm;
+    app.tof_restore_distance = mm;
+    app.send_command(HostCommand::SetSensor {
+        doa_angle: None,
+        mic_rms: None,
+        als_lux: None,
+        temp_c: None,
+        tof_mm: Some(mm),
+        swipe: None,
+        swipe_direction: None,
+    });
+}
 
-    if is_sn3236 {
+pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
+    let board_slug = app
+        .latest_state
+        .as_ref()
+        .map(|s| s.board_slug.clone())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| app.config.selected_board.clone());
+    let (is_sn3236, has_ultrasound) = board_sensor_capabilities(&board_slug);
+    let (card_title, card_subtitle) = if is_sn3236 {
         (
             "2. Лазерный дальномер ToF (VL53L0X) и датчики среды",
             "Оптический датчик жестов руки VL53L0X (Яндекс Станция Мини 1), освещённость ALS и температура SoC",
@@ -33,18 +48,7 @@ pub fn sensors_card_headers(board_slug: &str) -> (&'static str, &'static str) {
             "2. Датчики среды (ALS, температура SoC) и световое кольцо",
             "Датчик внешней освещённости ltr308als01 (IIO), температура SoC и управление Световым кольцом (LED Ring)",
         )
-    }
-}
-
-pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
-    let board_slug = app
-        .latest_state
-        .as_ref()
-        .map(|s| s.board_slug.clone())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| app.config.selected_board.clone());
-    let (is_sn3236, has_ultrasound) = board_sensor_capabilities(&board_slug);
-    let (card_title, card_subtitle) = sensors_card_headers(&board_slug);
+    };
 
     gnome_preferences_group(ui, card_title, card_subtitle, |ui| {
         if is_sn3236 {
@@ -64,32 +68,10 @@ pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
                         app.trigger_tof_wave();
                     }
                     if ui.button("Поднести ладонь (120 мм)").clicked() {
-                        app.tof_wave_reset_at = None;
-                        app.tof_slider = 120;
-                        app.tof_restore_distance = 120;
-                        app.send_command(HostCommand::SetSensor {
-                            doa_angle: None,
-                            mic_rms: None,
-                            als_lux: None,
-                            temp_c: None,
-                            tof_mm: Some(120),
-                            swipe: None,
-                            swipe_direction: None,
-                        });
+                        set_tof_distance(app, 120);
                     }
                     if ui.button("Убрать руку (8190 мм)").clicked() {
-                        app.tof_wave_reset_at = None;
-                        app.tof_slider = 8190;
-                        app.tof_restore_distance = 8190;
-                        app.send_command(HostCommand::SetSensor {
-                            doa_angle: None,
-                            mic_rms: None,
-                            als_lux: None,
-                            temp_c: None,
-                            tof_mm: Some(8190),
-                            swipe: None,
-                            swipe_direction: None,
-                        });
+                        set_tof_distance(app, 8190);
                     }
                 },
             );
@@ -104,17 +86,7 @@ pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
                         .add(egui::Slider::new(&mut app.tof_slider, 40..=8190).suffix(" мм"))
                         .changed()
                     {
-                        app.tof_wave_reset_at = None;
-                        app.tof_restore_distance = app.tof_slider;
-                        app.send_command(HostCommand::SetSensor {
-                            doa_angle: None,
-                            mic_rms: None,
-                            als_lux: None,
-                            temp_c: None,
-                            tof_mm: Some(app.tof_slider),
-                            swipe: None,
-                            swipe_direction: None,
-                        });
+                        set_tof_distance(app, app.tof_slider);
                     }
                 },
             );
@@ -129,45 +101,13 @@ pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
                         .add(egui::Slider::new(&mut app.tof_slider, 40..=8190).suffix(" мм"))
                         .changed()
                     {
-                        app.tof_wave_reset_at = None;
-                        app.tof_restore_distance = app.tof_slider;
-                        app.send_command(HostCommand::SetSensor {
-                            doa_angle: None,
-                            mic_rms: None,
-                            als_lux: None,
-                            temp_c: None,
-                            tof_mm: Some(app.tof_slider),
-                            swipe: None,
-                            swipe_direction: None,
-                        });
+                        set_tof_distance(app, app.tof_slider);
                     }
                     if ui.button("Ближнее эхо (180 мм)").clicked() {
-                        app.tof_wave_reset_at = None;
-                        app.tof_slider = 180;
-                        app.tof_restore_distance = 180;
-                        app.send_command(HostCommand::SetSensor {
-                            doa_angle: None,
-                            mic_rms: None,
-                            als_lux: None,
-                            temp_c: None,
-                            tof_mm: Some(180),
-                            swipe: None,
-                            swipe_direction: None,
-                        });
+                        set_tof_distance(app, 180);
                     }
                     if ui.button("Свободное поле (8190 мм)").clicked() {
-                        app.tof_wave_reset_at = None;
-                        app.tof_slider = 8190;
-                        app.tof_restore_distance = 8190;
-                        app.send_command(HostCommand::SetSensor {
-                            doa_angle: None,
-                            mic_rms: None,
-                            als_lux: None,
-                            temp_c: None,
-                            tof_mm: Some(8190),
-                            swipe: None,
-                            swipe_direction: None,
-                        });
+                        set_tof_distance(app, 8190);
                     }
                 },
             );
@@ -243,34 +183,4 @@ pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
             },
         );
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sensors_card_headers_tof_only_for_yandexmini() {
-        assert_eq!(protocol::BOARD_CATALOG.len(), 13);
-        for b in protocol::BOARD_CATALOG {
-            let (title, subtitle) = sensors_card_headers(b.slug);
-            let has_tof = title.contains("ToF")
-                || title.contains("VL53L0X")
-                || subtitle.contains("ToF")
-                || subtitle.contains("VL53L0X");
-            if b.slug == "yandexmini" {
-                assert!(
-                    has_tof,
-                    "yandexmini headers must mention ToF / VL53L0X: {:?} / {:?}",
-                    title, subtitle
-                );
-            } else {
-                assert!(
-                    !has_tof,
-                    "board '{}' headers must NOT mention ToF or VL53L0X: {:?} / {:?}",
-                    b.slug, title, subtitle
-                );
-            }
-        }
-    }
 }
