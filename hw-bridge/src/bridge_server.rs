@@ -195,6 +195,7 @@ pub fn handle_host_command(state: &Arc<BridgeState>, cmd: HostCommand) -> GuestP
         }
         HostCommand::SetLedPattern { pattern } => {
             let pat = pattern.trim().to_string();
+            state.volume_overlay_until_ms.store(0, Ordering::SeqCst);
             *state.forced_led_pattern.lock().unwrap() = pat.clone();
             if pat.is_empty() {
                 state.log("LED Pattern Tester -> Returned to automatic state mode");
