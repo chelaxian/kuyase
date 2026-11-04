@@ -10,16 +10,10 @@ pub const HIJACK_WINDOW_MS: u64 = 1680;
 
 pub const LED_PATTERNS: &[(&str, &str)] = &[
     ("", "Авто (по состоянию Quasar)"),
-    ("listening", "listening.led (Голубой)"),
-    ("speaking", "speaking.led (Фиолетовый)"),
-    ("thinking", "thinking.led (Вращение)"),
-    ("mute_mics", "mute_mics.led (Красный)"),
-    ("volume", "volume.led (Зеленый)"),
-    ("timer", "timer.led"),
-    ("error", "error.led"),
-    ("bluetooth_playing", "bluetooth_playing.led"),
-    ("notification_available", "notification_available.led"),
-    ("rgb:#00E5FF", "Сплошной Бирюзовый (rgb:#00E5FF)"),
+    ("rgb:#6B0FFF", "Фиолетовый (#6B0FFF)"),
+    ("alice_pro_listening", "Алиса Про (#00FF80)"),
+    ("rgb:#00E5FF", "Бирюзовый (#00E5FF)"),
+    ("mute_mics", "Красный Mute (#FF0000)"),
 ];
 
 pub(crate) fn gnome_preferences_group(

@@ -83,6 +83,7 @@ impl KuyaseGuiApp {
                                 )
                                 .changed()
                             {
+                                self.state.ensure_board_led_patterns_loaded();
                                 let _ = self.state.save_config();
                             }
                         }

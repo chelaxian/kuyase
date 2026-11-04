@@ -1,68 +1,92 @@
 use crate::state::{now_millis, AliceState, BridgeState};
 use std::fs;
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+const LEDPATTERNS_ROOT: &str = "/system/vendor/quasar/ledpatterns";
+
 pub fn parse_led_pattern_str(raw: &str, ring_leds: usize) -> Vec<(Vec<[u8; 3]>, u32)> {
-    let mut frames = Vec::new();
-    for line in raw.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 2 {
-            continue;
-        }
-        let Ok(dur_ms) = parts.last().unwrap().parse::<u32>() else {
-            continue;
-        };
-        let hex_tokens = &parts[..parts.len() - 1];
-        let mut parsed = Vec::with_capacity(hex_tokens.len());
-        for tok in hex_tokens {
-            if tok.len() == 6 {
-                if let Ok(rgb) = u32::from_str_radix(tok, 16) {
-                    parsed.push([
-                        ((rgb >> 16) & 0xff) as u8,
-                        ((rgb >> 8) & 0xff) as u8,
-                        (rgb & 0xff) as u8,
-                    ]);
-                }
-            } else if tok.len() == 8 {
-                if let Ok(rgbw) = u32::from_str_radix(tok, 16) {
-                    let r = ((rgbw >> 24) & 0xff) as u8;
-                    let g = ((rgbw >> 16) & 0xff) as u8;
-                    let b = ((rgbw >> 8) & 0xff) as u8;
-                    let w = (rgbw & 0xff) as u8;
-                    parsed.push([
-                        r.saturating_add(w / 2),
-                        g.saturating_add(w / 2),
-                        b.saturating_add(w / 2),
-                    ]);
+    protocol::parse_led_pattern_frames(raw, ring_leds)
+}
+
+fn collect_led_files_recursive(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    out: &mut Vec<protocol::LedPatternInfo>,
+) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_led_files_recursive(root, &path, depth + 1, out);
+        } else if path.is_file() {
+            let Ok(rel) = path.strip_prefix(root) else {
+                continue;
+            };
+            let rel_id = rel.to_string_lossy().replace('\\', "/");
+            if !protocol::is_supported_led_pattern_path(&rel_id) {
+                continue;
+            }
+            if let Ok(raw) = fs::read_to_string(&path) {
+                if let Some(info) = protocol::build_led_pattern_info(&rel_id, &raw) {
+                    out.push(info);
                 }
             }
-        }
-        if !parsed.is_empty() && ring_leds > 0 {
-            let mut resized = Vec::with_capacity(ring_leds);
-            for i in 0..ring_leds {
-                resized.push(parsed[i % parsed.len()]);
-            }
-            frames.push((resized, dur_ms.clamp(15, 250)));
         }
     }
-    frames
+}
+
+pub fn discover_guest_led_patterns() -> Vec<protocol::LedPatternInfo> {
+    let root = Path::new(LEDPATTERNS_ROOT);
+    let mut out = Vec::new();
+    if root.is_dir() {
+        collect_led_files_recursive(root, root, 0, &mut out);
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    out
 }
 
 fn load_led_pattern(kind: &str, ring_leds: usize) -> Vec<(Vec<[u8; 3]>, u32)> {
-    let candidates = [
-        format!("/system/vendor/quasar/ledpatterns/ring/{}.led", kind),
-        format!("/system/vendor/quasar/ledpatterns/panel/{}.led", kind),
-        format!("/system/vendor/quasar/ledpatterns/oknix/{}.led", kind),
-        format!("/system/vendor/quasar/ledpatterns/{}.led", kind),
-        format!("/system/vendor/quasar/ledpatterns/ring/alice_{}.led", kind),
-        format!("/system/vendor/quasar/ledpatterns/panel/alice_{}.led", kind),
-        format!("/system/vendor/quasar/ledpatterns/oknix/alice_{}.led", kind),
-        format!("/system/vendor/quasar/ledpatterns/alice_{}.led", kind),
-        format!("/system/vendor/quasar/ledpatterns/alice_pro_{}.led", kind),
+    let trimmed = kind.trim().trim_start_matches('/');
+    let stem = trimmed.trim_end_matches(".led");
+    let base_stem = stem.rsplit('/').next().unwrap_or(stem);
+
+    let mut candidates = vec![
+        format!("{}/{}", LEDPATTERNS_ROOT, trimmed),
+        format!("{}/{}.led", LEDPATTERNS_ROOT, stem),
+        format!("{}/ring/{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/panel/{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/oknix/{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/ambilight/{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/ring/alice_{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/panel/alice_{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/oknix/alice_{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/alice_{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/ring/alice_pro_{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/oknix/alice_pro_{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/alice_pro_{}.led", LEDPATTERNS_ROOT, base_stem),
     ];
+
+    if base_stem == "mute_mics" || base_stem == "mute" {
+        for alt in ["mute_mics", "mute"] {
+            candidates.push(format!("{}/ring/{}.led", LEDPATTERNS_ROOT, alt));
+            candidates.push(format!("{}/panel/{}.led", LEDPATTERNS_ROOT, alt));
+            candidates.push(format!("{}/oknix/{}.led", LEDPATTERNS_ROOT, alt));
+            candidates.push(format!("{}/ambilight/{}.led", LEDPATTERNS_ROOT, alt));
+            candidates.push(format!("{}/{}.led", LEDPATTERNS_ROOT, alt));
+        }
+    }
+
     for path in &candidates {
         if let Ok(raw) = fs::read_to_string(path) {
             let frames = parse_led_pattern_str(&raw, ring_leds);
@@ -72,10 +96,24 @@ fn load_led_pattern(kind: &str, ring_leds: usize) -> Vec<(Vec<[u8; 3]>, u32)> {
         }
     }
 
-    if kind == "mute_mics" {
+    if base_stem == "mute_mics" || base_stem == "mute" {
         return vec![(vec![[255, 0, 0]; ring_leds], 100)];
     }
-    if kind == "error" {
+    if base_stem == "alice_pro_listening" || base_stem == "alice_pro_speaking" {
+        let mut pro_fallback = Vec::new();
+        for f in 0..20 {
+            let mut px = Vec::with_capacity(ring_leds);
+            for i in 0..ring_leds {
+                let phase = ((i + f) % ring_leds.max(1)) as f32 / (ring_leds.max(1) as f32);
+                let g = (120.0 + 135.0 * phase) as u8;
+                let b = (80.0 + 90.0 * (1.0 - phase)) as u8;
+                px.push([0, g, b]);
+            }
+            pro_fallback.push((px, 30));
+        }
+        return pro_fallback;
+    }
+    if base_stem == "error" {
         return vec![(vec![[255, 30, 0]; ring_leds], 80)];
     }
 
@@ -98,15 +136,30 @@ fn load_ambilight_pattern(kind: &str, zones: usize) -> Vec<(Vec<[u8; 3]>, u32)> 
     if zones == 0 {
         return Vec::new();
     }
-    let candidates = [
-        format!("/system/vendor/quasar/ledpatterns/oknix/{}.led", kind),
-        format!("/system/vendor/quasar/ledpatterns/oknix/alice_{}.led", kind),
-        format!("/system/vendor/quasar/ledpatterns/oknix/alice_pro_{}.led", kind),
-        format!("/system/vendor/quasar/ledpatterns/ambilight/{}.led", kind),
-        "/system/vendor/quasar/ledpatterns/oknix/alice_speaking.led".to_string(),
-        "/system/vendor/quasar/ledpatterns/oknix/boot.led".to_string(),
-        "/system/vendor/quasar/ledpatterns/ambilight/boot.led".to_string(),
+    let trimmed = kind.trim().trim_start_matches('/');
+    let stem = trimmed.trim_end_matches(".led");
+    let base_stem = stem.rsplit('/').next().unwrap_or(stem);
+
+    let mut candidates = vec![
+        format!("{}/oknix/{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/oknix/alice_{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/oknix/alice_pro_{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/ambilight/{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/ambilight/alice_{}.led", LEDPATTERNS_ROOT, base_stem),
+        format!("{}/ambilight/alice_pro_{}.led", LEDPATTERNS_ROOT, base_stem),
     ];
+    if base_stem == "mute_mics" || base_stem == "mute" {
+        for alt in ["mute_mics", "mute"] {
+            candidates.push(format!("{}/oknix/{}.led", LEDPATTERNS_ROOT, alt));
+            candidates.push(format!("{}/ambilight/{}.led", LEDPATTERNS_ROOT, alt));
+        }
+    }
+    if base_stem == "violet" {
+        candidates.push(format!("{}/oknix/alice_speaking.led", LEDPATTERNS_ROOT));
+        candidates.push(format!("{}/oknix/boot.led", LEDPATTERNS_ROOT));
+        candidates.push(format!("{}/ambilight/boot.led", LEDPATTERNS_ROOT));
+    }
+
     for path in &candidates {
         if let Ok(raw) = fs::read_to_string(path) {
             let frames = parse_led_pattern_str(&raw, zones);
@@ -115,7 +168,7 @@ fn load_ambilight_pattern(kind: &str, zones: usize) -> Vec<(Vec<[u8; 3]>, u32)> 
             }
         }
     }
-    vec![(vec![[107, 15, 255]; zones], 40)]
+    load_led_pattern(kind, zones)
 }
 
 fn build_volume_led_frame(
@@ -204,8 +257,10 @@ pub fn sync_immediate_led_state(state: &BridgeState) {
             return;
         }
         let frames = load_led_pattern(&forced, ring_leds);
+        let aux_frames = load_ambilight_pattern(&forced, aux_zones);
+        let aux_px = aux_frames.first().map(|(px, _)| px.clone());
         if let Some((px, _)) = frames.first() {
-            apply_native_frames(state, px.clone(), None);
+            apply_native_frames(state, px.clone(), aux_px);
         }
         return;
     }
@@ -252,14 +307,13 @@ pub fn spawn_native_led_animator(state: Arc<BridgeState>) {
         let aux_zones = state.peripherals.aux_light.zone_count();
         let listening_frames = load_led_pattern("listening", ring_leds);
         let speaking_frames = load_led_pattern("speaking", ring_leds);
-        let thinking_frames = load_led_pattern("thinking", ring_leds);
         let mute_frames = load_led_pattern("mute_mics", ring_leds);
         let volume_frames = load_led_pattern("volume", ring_leds);
-        let timer_frames = load_led_pattern("timer", ring_leds);
-        let error_frames = load_led_pattern("error", ring_leds);
-        let bt_frames = load_led_pattern("bluetooth_playing", ring_leds);
-        let notif_frames = load_led_pattern("notification_available", ring_leds);
         let ambilight_violet = load_ambilight_pattern("violet", aux_zones);
+
+        let mut cached_forced_name = String::new();
+        let mut cached_forced_ring: Vec<(Vec<[u8; 3]>, u32)> = Vec::new();
+        let mut cached_forced_aux: Vec<(Vec<[u8; 3]>, u32)> = Vec::new();
 
         let mut frame_idx = 0usize;
         let mut was_active = false;
@@ -297,22 +351,16 @@ pub fn spawn_native_led_animator(state: Arc<BridgeState>) {
                     thread::sleep(Duration::from_millis(60));
                     continue;
                 }
-                let frames = match forced.as_str() {
-                    "listening" | "alice_listening" => &listening_frames,
-                    "speaking" | "alice_speaking" => &speaking_frames,
-                    "thinking" | "alice_thinking" => &thinking_frames,
-                    "mute_mics" => &mute_frames,
-                    "volume" => &volume_frames,
-                    "timer" => &timer_frames,
-                    "error" => &error_frames,
-                    "bluetooth_playing" => &bt_frames,
-                    "notification_available" => &notif_frames,
-                    _ => &listening_frames,
-                };
-                let (ref px, dur_ms) = frames[frame_idx % frames.len()];
-                let aux = if aux_zones > 0 && !ambilight_violet.is_empty() {
+                if cached_forced_name != forced || cached_forced_ring.is_empty() {
+                    cached_forced_ring = load_led_pattern(&forced, ring_leds);
+                    cached_forced_aux = load_ambilight_pattern(&forced, aux_zones);
+                    cached_forced_name = forced.clone();
+                    frame_idx = 0;
+                }
+                let (ref px, dur_ms) = cached_forced_ring[frame_idx % cached_forced_ring.len()];
+                let aux = if aux_zones > 0 && !cached_forced_aux.is_empty() {
                     was_aux_active = true;
-                    Some(ambilight_violet[frame_idx % ambilight_violet.len()].0.clone())
+                    Some(cached_forced_aux[frame_idx % cached_forced_aux.len()].0.clone())
                 } else {
                     None
                 };

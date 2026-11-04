@@ -1,10 +1,15 @@
 pub mod boards;
 pub mod display;
+pub mod led_patterns;
 
 pub use boards::{
     board_display_label, board_has_matrix_21x12, board_has_segment_clock, default_board_ring_leds,
     detect_board_hint_from_filename, detect_board_hint_from_path, detect_board_slug_from_probe,
     find_board_descriptor, normalize_board_slug, BoardDescriptor, BOARD_CATALOG,
+};
+pub use led_patterns::{
+    build_led_pattern_info, classify_rgb_color_ru, extract_led_pattern_primary_rgb, format_rgb_hex,
+    is_supported_led_pattern_path, parse_led_pattern_frames, LedPatternInfo,
 };
 
 use serde::{Deserialize, Serialize};
@@ -81,6 +86,8 @@ pub struct BridgeStateSnapshot {
     pub last_spoken_text: String,
     pub recent_logs: Vec<String>,
     pub maind_logs: Vec<String>,
+    #[serde(default)]
+    pub available_led_patterns: Vec<LedPatternInfo>,
 }
 
 impl Default for BridgeStateSnapshot {
@@ -124,6 +131,7 @@ impl Default for BridgeStateSnapshot {
             last_spoken_text: String::new(),
             recent_logs: Vec::new(),
             maind_logs: Vec::new(),
+            available_led_patterns: Vec::new(),
         }
     }
 }

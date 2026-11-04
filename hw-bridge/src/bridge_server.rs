@@ -106,6 +106,7 @@ pub fn build_state_snapshot(state: &Arc<BridgeState>) -> BridgeStateSnapshot {
         last_spoken_text: last_spoken,
         recent_logs: logs,
         maind_logs: maind_tail,
+        available_led_patterns: state.available_led_patterns.clone(),
     }
 }
 

@@ -26,6 +26,7 @@ fn set_tof_distance(app: &mut GuiAppState, mm: u32) {
 }
 
 pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
+    app.ensure_board_led_patterns_loaded();
     let board_slug = app.active_board_slug();
     let (is_sn3236, has_ultrasound) = board_sensor_capabilities(&board_slug);
     let (card_title, card_subtitle) = if is_sn3236 {
@@ -155,24 +156,87 @@ pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
                     });
                 }
 
-                egui::ComboBox::from_id_salt("gnome_led_pattern_combo")
-                    .selected_text(if app.selected_led_pattern.is_empty() {
-                        "LED: Авто (Quasar)"
-                    } else {
-                        &app.selected_led_pattern
-                    })
-                    .width(185.0)
+                let preset_selected_text = if !app.selected_firmware_led_pattern.is_empty() {
+                    "Пресет: — (выбран .led)".to_string()
+                } else {
+                    let lbl = LED_PATTERNS
+                        .iter()
+                        .find(|&&(val, _)| val == app.selected_led_pattern)
+                        .map(|&(_, l)| l)
+                        .unwrap_or("Авто (по состоянию Quasar)");
+                    format!("Пресет: {}", lbl)
+                };
+
+                egui::ComboBox::from_id_salt("gnome_led_preset_combo")
+                    .selected_text(preset_selected_text)
+                    .width(210.0)
                     .show_ui(ui, |ui| {
                         for &(val, label) in LED_PATTERNS {
-                            if ui
-                                .selectable_label(app.selected_led_pattern == val, label)
-                                .clicked()
-                            {
+                            let is_sel = app.selected_firmware_led_pattern.is_empty()
+                                && app.selected_led_pattern == val;
+                            if ui.selectable_label(is_sel, label).clicked() {
+                                app.selected_firmware_led_pattern.clear();
                                 app.selected_led_pattern = val.to_string();
                                 app.send_command(HostCommand::SetLedPattern {
                                     pattern: app.selected_led_pattern.clone(),
                                 });
                             }
+                        }
+                    });
+
+                let fw_selected_text = if app.selected_firmware_led_pattern.is_empty() {
+                    if app.firmware_led_patterns.is_empty() {
+                        "Из прошивки (.led): нет образа".to_string()
+                    } else {
+                        format!(
+                            "Из прошивки (.led): {} файлов",
+                            app.firmware_led_patterns.len()
+                        )
+                    }
+                } else {
+                    app.firmware_led_patterns
+                        .iter()
+                        .find(|p| p.id == app.selected_firmware_led_pattern)
+                        .map(|p| p.label.clone())
+                        .unwrap_or_else(|| app.selected_firmware_led_pattern.clone())
+                };
+
+                egui::ComboBox::from_id_salt("gnome_firmware_led_combo")
+                    .selected_text(fw_selected_text)
+                    .width(265.0)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(
+                                app.selected_firmware_led_pattern.is_empty(),
+                                "— Не выбран (использовать Пресет) —",
+                            )
+                            .clicked()
+                        {
+                            app.selected_firmware_led_pattern.clear();
+                            app.selected_led_pattern.clear();
+                            app.send_command(HostCommand::SetLedPattern {
+                                pattern: String::new(),
+                            });
+                        }
+                        if !app.firmware_led_patterns.is_empty() {
+                            ui.separator();
+                        }
+                        for info in app.firmware_led_patterns.clone() {
+                            let is_sel = app.selected_firmware_led_pattern == info.id;
+                            let [r, g, b] = info.primary_rgb;
+                            let swatch = RichText::new("●")
+                                .color(Color32::from_rgb(r, g, b))
+                                .strong();
+                            ui.horizontal(|ui| {
+                                ui.label(swatch);
+                                if ui.selectable_label(is_sel, &info.label).clicked() {
+                                    app.selected_firmware_led_pattern = info.id.clone();
+                                    app.selected_led_pattern = info.id.clone();
+                                    app.send_command(HostCommand::SetLedPattern {
+                                        pattern: info.id,
+                                    });
+                                }
+                            });
                         }
                     });
             },
