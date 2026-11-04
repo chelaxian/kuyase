@@ -312,11 +312,12 @@ pub enum StubAppletKind {
     QuasarLauncher2,
     IdleDaemon(String),
     DbusStub,
+    PrepareRuntimeEnv,
 }
 
 /// Classifies `argv` to determine whether `qemu-hw-bridge` was invoked as a `Stub Mode`
-/// lifecycle applet (`quasar_launcher2`, `maind`, or `begemot`) or `Full Mode` D-Bus service
-/// helper (`--dbus-stub`).
+/// lifecycle applet (`quasar_launcher2`, `maind`, or `begemot`), `Full Mode` D-Bus service
+/// helper (`--dbus-stub`), or early init helper (`--prepare-runtime-env`).
 pub fn classify_stub_applet_args(args: &[String]) -> Option<StubAppletKind> {
     let arg0 = args.first().map(|s| s.as_str()).unwrap_or("");
     let arg0_base = Path::new(arg0)
@@ -325,6 +326,9 @@ pub fn classify_stub_applet_args(args: &[String]) -> Option<StubAppletKind> {
         .unwrap_or(arg0);
     let arg1 = args.get(1).map(|s| s.as_str()).unwrap_or("");
 
+    if arg1 == "--prepare-runtime-env" {
+        return Some(StubAppletKind::PrepareRuntimeEnv);
+    }
     if arg1 == "--dbus-stub" {
         return Some(StubAppletKind::DbusStub);
     }
@@ -344,8 +348,9 @@ pub fn classify_stub_applet_args(args: &[String]) -> Option<StubAppletKind> {
     None
 }
 
-/// Dispatches `quasar_launcher2`, `maind`/`begemot` idle stubs, or `--dbus-stub` when
-/// `qemu-hw-bridge` is invoked via bind-mount or `/tmp/.kuyase-stubs/*`. Returns `true` if handled.
+/// Dispatches `quasar_launcher2`, `maind`/`begemot` idle stubs, `--dbus-stub`, or
+/// `--prepare-runtime-env` when `qemu-hw-bridge` is invoked via bind-mount, `/tmp/.kuyase-stubs/*`,
+/// or `/quasar-qemu-init.sh`. Returns `true` if handled.
 pub fn maybe_run_stub_applet() -> bool {
     let args: Vec<String> = env::args().collect();
     match classify_stub_applet_args(&args) {
@@ -360,6 +365,14 @@ pub fn maybe_run_stub_applet() -> bool {
             setup_stub_signals(false);
             detach_stdio_and_extra_fds();
             crate::dbus_stub::run_dbus_stub_applet();
+        }
+        Some(StubAppletKind::PrepareRuntimeEnv) => {
+            let profile = crate::state::BoardProfile::detect();
+            let full_mode = fs::read_to_string("/proc/cmdline")
+                .map(|c| c.split_whitespace().any(|t| t == "quasar.mode=full"))
+                .unwrap_or(false);
+            prepare_runtime_environment(&profile.board_slug, full_mode);
+            true
         }
         None => false,
     }
@@ -600,18 +613,25 @@ pub fn ensure_virtual_wlan0_netdev() {
         .map(|s| s.success())
         .unwrap_or(false);
 
-    if !wlan0_exists {
-        // Check if a `--lan-tap` virtio NIC (`52:4b:59:*`) is present and rename it to `wlan0` first.
-        let mut renamed_lan_tap = false;
-        if let Ok(out) = Command::new("ip")
-            .args(["-o", "link", "show"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-        {
-            let text = String::from_utf8_lossy(&out.stdout);
-            for line in text.lines() {
-                if line.contains("52:4b:59:") {
+    let mut lan_tap_mac: Option<String> = None;
+
+    if let Ok(out) = Command::new("ip")
+        .args(["-o", "link", "show"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if let Some(pos) = line.find("52:4b:59:") {
+                let mac: String = line[pos..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_hexdigit() || *c == ':')
+                    .collect();
+                if !mac.is_empty() {
+                    lan_tap_mac = Some(mac);
+                }
+                if !wlan0_exists {
                     if let Some(ifname) = line
                         .split(':')
                         .nth(1)
@@ -624,48 +644,43 @@ pub fn ensure_virtual_wlan0_netdev() {
                                 .stdout(Stdio::null())
                                 .stderr(Stdio::null())
                                 .status();
-                            if Command::new("ip")
+                            let _ = Command::new("ip")
                                 .args(["link", "set", ifname, "name", "wlan0"])
                                 .stdin(Stdio::null())
                                 .stdout(Stdio::null())
                                 .stderr(Stdio::null())
-                                .status()
-                                .map(|s| s.success())
-                                .unwrap_or(false)
-                            {
-                                renamed_lan_tap = true;
-                                break;
-                            }
+                                .status();
+                            break;
                         }
                     }
                 }
             }
         }
+    }
 
-        if !renamed_lan_tap {
-            let dummy_ok = Command::new("ip")
-                .args(["link", "add", "wlan0", "type", "dummy"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-            if !dummy_ok {
-                let _ = Command::new("ip")
-                    .args(["link", "set", "sit0", "name", "wlan0"])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            }
+    if !wlan0_exists && lan_tap_mac.is_none() {
+        let dummy_ok = Command::new("ip")
+            .args(["link", "add", "wlan0", "type", "dummy"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !dummy_ok {
             let _ = Command::new("ip")
-                .args(["link", "set", "wlan0", "address", "52:54:00:12:34:57"])
+                .args(["link", "set", "sit0", "name", "wlan0"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
         }
+        let _ = Command::new("ip")
+            .args(["link", "set", "wlan0", "address", "52:54:00:12:34:57"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 
     let up_ok = Command::new("ip")
@@ -685,8 +700,11 @@ pub fn ensure_virtual_wlan0_netdev() {
             .status();
     }
 
+    let _ = fs::create_dir_all("/sys/class/net/eth0");
+    let _ = fs::write("/sys/class/net/eth0/address", "52:54:00:12:34:56\n");
     let _ = fs::create_dir_all("/sys/class/net/wlan0");
-    let _ = fs::write("/sys/class/net/wlan0/address", "52:54:00:12:34:57\n");
+    let wlan_mac = lan_tap_mac.as_deref().unwrap_or("52:54:00:12:34:57");
+    let _ = fs::write("/sys/class/net/wlan0/address", format!("{}\n", wlan_mac));
 }
 
 /// Bind-mounts `/usr/local/bin/qemu-hw-bridge` over `/system/vendor/quasar/quasar_launcher2`
@@ -912,7 +930,38 @@ pub fn ensure_dbus_system_config_under(root: &Path) {
     let services_dir = root.join("usr/share/dbus-1/system-services");
     if services_dir.exists() {
         const BLUEZ_SERVICE_STUB: &str = "[D-BUS Service]\nName=org.bluez\nExec=/usr/local/bin/qemu-hw-bridge --dbus-stub\nUser=root\n";
-        let _ = fs::write(services_dir.join("org.bluez.service"), BLUEZ_SERVICE_STUB);
+        let target_svc = services_dir.join("org.bluez.service");
+        if root == Path::new("/") {
+            let _ = fs::create_dir_all(STUB_DIR);
+            let ram_svc = format!("{}/org.bluez.service", STUB_DIR);
+            if fs::write(&ram_svc, BLUEZ_SERVICE_STUB).is_ok() {
+                if !target_svc.exists() {
+                    let _ = fs::write(&target_svc, BLUEZ_SERVICE_STUB);
+                } else if !bind_mount_file(
+                    &ram_svc,
+                    "/usr/share/dbus-1/system-services/org.bluez.service",
+                ) {
+                    let _ = fs::write(&target_svc, BLUEZ_SERVICE_STUB);
+                }
+            }
+        } else {
+            let _ = fs::write(&target_svc, BLUEZ_SERVICE_STUB);
+        }
+    }
+
+    // AirPlay on Midi (`cucumber`) / Station 3 (`orion`) needs the packaged Avahi D-Bus policy in `/etc/dbus-1/system.d`.
+    let airplay_pkgs_dir = root.join("data/yam/pkgs/station/airplay");
+    if let Ok(entries) = fs::read_dir(&airplay_pkgs_dir) {
+        for entry in entries.flatten() {
+            let avahi_policy = entry
+                .path()
+                .join("share/luna/plugins/station.airplay/config/avahi-dbus.conf");
+            if avahi_policy.exists() {
+                let _ = fs::create_dir_all(&dbus_system_d);
+                let _ = fs::copy(&avahi_policy, dbus_system_d.join("avahi-dbus.conf"));
+                break;
+            }
+        }
     }
 }
 
@@ -992,6 +1041,13 @@ mod tests {
                 "--dbus-stub".to_string()
             ]),
             Some(StubAppletKind::DbusStub)
+        );
+        assert_eq!(
+            classify_stub_applet_args(&[
+                "/usr/local/bin/qemu-hw-bridge".to_string(),
+                "--prepare-runtime-env".to_string()
+            ]),
+            Some(StubAppletKind::PrepareRuntimeEnv)
         );
         assert_eq!(
             classify_stub_applet_args(&["/usr/local/bin/qemu-hw-bridge".to_string()]),

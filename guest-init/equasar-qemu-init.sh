@@ -84,33 +84,6 @@ mkdir -p /tmp/daemons_logs /run/dbus /run/avahi \
          /data/quasar/daemons_logs /data/quasar/data /data/quasar/logs
 touch /tmp/daemons_logs/maind.log
 
-# Unify /data/quasar/daemons_logs/maind.log and /tmp/daemons_logs/maind.log via symlink
-# so native Quasar tools (`quasar.cfg` LOGS="${DATA}/daemons_logs") and Hardware Bridge
-# share a single log file.
-ln -sfn /tmp/daemons_logs/maind.log /data/quasar/daemons_logs/maind.log 2>/dev/null || true
-ln -sfn /tmp/daemons_logs/maind.log /bkupgrade/data/quasar/daemons_logs/maind.log 2>/dev/null || true
-
-# Linkplay fnvram stub for yandexmini (`libnvram.so` / `libwmdb.so` used by `q device-id` and `q full-info`):
-# - `/vendor` symlink to `/bkupgrade` (created on physical hardware by `S05linkplay.sh`)
-# - status `3` required by `verify_fnvram_statu` (`0` logs "fnvram status file not found!")
-# - JSON `{"mv_uuid":"EMU0001"}` parsed by `fnvram_bufget` (`json-c`)
-[ -e /vendor ] || ln -sfn /bkupgrade /vendor 2>/dev/null || true
-for _fnv_st in /bkupgrade/new_nvram_config_status /bkupgrade/new_nvram_factory_status; do
-  [ -f "$_fnv_st" ] || printf '3\n' > "$_fnv_st" 2>/dev/null || true
-done
-for _fnv_cfg in /bkupgrade/new_nvram_config /bkupgrade/new_nvram_config_bak /bkupgrade/new_nvram_factory /bkupgrade/new_nvram_factory_bak; do
-  [ -f "$_fnv_cfg" ] || printf '{"mv_uuid":"EMU0001"}\n' > "$_fnv_cfg" 2>/dev/null || true
-done
-
-# Fallback set_volume.sh for boards (such as cucumber) that omit /system/vendor/quasar/set_volume.sh
-if [ -d /system/vendor/quasar ] && [ ! -e /system/vendor/quasar/set_volume.sh ]; then
-  cat > /system/vendor/quasar/set_volume.sh << 'EOF'
-#!/bin/sh
-amixer set 'Master' "$1%" >/dev/null 2>&1 || true
-EOF
-  chmod 0755 /system/vendor/quasar/set_volume.sh 2>/dev/null || true
-fi
-
 # 1. Detect board profile & flags from kernel cmdline
 BOARD="auto"
 MODE="stub"
@@ -388,21 +361,6 @@ echo "$BOARD_NAME" > /sys/devices/virtual/dmi/id/product_name
 ln -sfn /tmp/fake-dt /sys/firmware/devicetree/base 2>/dev/null || true
 mount --bind /tmp/fake-dt /proc/device-tree 2>/dev/null || true
 
-# Network identity for components that read /sys/class/net (AirPlay mDNS id) and `q wifi-info` (`maind --wifi-info`).
-# When no `--lan-tap` (`52:4b:59:*`) NIC is attached, create a virtual `wlan0` kernel interface
-# (falling back to renaming `sit0` when `CONFIG_DUMMY` is disabled in the guest kernel) so
-# `RtnlLinkMonitor` finds `wlan0` via netlink `RTM_GETLINK`.
-if ! ip link show wlan0 >/dev/null 2>&1; then
-  if ! ip -o link show 2>/dev/null | grep -q '52:4b:59:'; then
-    ip link add wlan0 type dummy 2>/dev/null || ip link set sit0 name wlan0 2>/dev/null || true
-    ip link set wlan0 address 52:54:00:12:34:57 2>/dev/null || true
-  fi
-fi
-ip link set wlan0 up 2>/dev/null || ifconfig wlan0 up 2>/dev/null || true
-mkdir -p /sys/class/net/eth0 /sys/class/net/wlan0
-echo 52:54:00:12:34:56 > /sys/class/net/eth0/address 2>/dev/null || true
-echo 52:54:00:12:34:57 > /sys/class/net/wlan0/address 2>/dev/null || true
-
 # Write hardware summary JSON for qemu-hw-bridge and external SDK tools
 cat > /tmp/quasar-emu-hw.json << EOF
 {
@@ -635,17 +593,6 @@ echo "assembly" > /sys/class/unifykeys/name
 echo "yes" > /sys/class/unifykeys/exist
 echo '{"fabric":"rev1"}' > /sys/class/unifykeys/read
 
-# SDIO Wi-Fi chip sysfs nodes (`mmc1:0001:1`, Broadcom BCM43455 `0x02d0` / `0xa9bf`)
-# required by `/usr/bin/yandex-wifichipmodel` invoked on `maind` startup.
-mkdir -p /sys/bus/sdio/devices/mmc1:0001:1
-echo "0x02d0" > /sys/bus/sdio/devices/mmc1:0001:1/vendor
-echo "0xa9bf" > /sys/bus/sdio/devices/mmc1:0001:1/device
-
-# Default pcba_ids node (silences `[warning] [pcba_ids.cpp:15] PcbaIds node doesn't exist`
-# on boards that do not override it below).
-mkdir -p /sys/devices/platform/pcba_ids/pcba_ids_drv
-echo '[{"name":"main","assembly":"1"}]' > /sys/devices/platform/pcba_ids/pcba_ids_drv/pcba_ids
-
 mkdir -p /sys/bus/i2c/devices/3-0021 /sys/bus/i2c/devices/3-0037
 if [ "$BOARD" = "orion" ]; then
   mkdir -p /sys/bus/i2c/devices/2-002c /sys/bus/i2c/devices/3-002c /sys/bus/i2c/devices/3-002d /sys/bus/i2c/devices/3-002e
@@ -849,105 +796,15 @@ if [ -x /data/qemu-hw-bridge ]; then
   chmod 0755 /usr/local/bin/qemu-hw-bridge 2>/dev/null || true
 fi
 
-# 8b. Three-stage D-Bus system bus & org.bluez / org.bluealsa initialization BEFORE onboot.sh:
-# Native BlueZ-based `maind --platformd` builds (0.13+, 0.369+, 0.373+) initialize sdbus-c++
-# on startup and abort with `sdbus::Error` unless:
-#   (1) /var/run -> /run is unified so /run/dbus/system_bus_socket is reachable (`FileNotFound`),
-#   (2) /usr/libexec/dbus-daemon-launch-helper has mode 04750 and owner 0:85 (`Spawn.PermissionsInvalid`),
-#   (3) `dbus-daemon --system` and the `org.bluez` + `org.bluealsa` responder are active before
-#       `onboot.sh` launches `maind --platformd` (`NoReply`).
-mkdir -p /run/dbus /run/avahi /usr/local/var/run 2>/dev/null || true
-chown 85:85 /run/dbus 2>/dev/null || true
-chown 86:86 /run/avahi 2>/dev/null || true
-ln -sfn /run/dbus /usr/local/var/run/dbus 2>/dev/null || true
-
-if [ -e /usr/libexec/dbus-daemon-launch-helper ]; then
-  chown 0:85 /usr/libexec/dbus-daemon-launch-helper 2>/dev/null || true
-  chmod 04750 /usr/libexec/dbus-daemon-launch-helper 2>/dev/null || true
-fi
-
-cat > /tmp/kuyase-bus.conf << 'BUSEOF'
-<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
-<busconfig>
-  <type>system</type>
-  <listen>unix:path=/run/dbus/system_bus_socket</listen>
-  <auth>EXTERNAL</auth>
-  <policy context="default">
-    <allow user="*"/>
-    <allow own="*"/>
-    <allow send_type="method_call"/>
-    <allow send_destination="*"/>
-    <allow receive_sender="*"/>
-  </policy>
-</busconfig>
-BUSEOF
-
-if [ -d /etc/dbus-1 ]; then
-  mkdir -p /etc/dbus-1/system.d 2>/dev/null || true
-  cat > /etc/dbus-1/system.d/kuyase-allow-all.conf << 'POLCEOF'
-<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
-<busconfig>
-  <policy context="default">
-    <allow user="*"/>
-    <allow own="*"/>
-    <allow send_type="method_call"/>
-    <allow send_destination="*"/>
-    <allow receive_sender="*"/>
-  </policy>
-</busconfig>
-POLCEOF
-fi
-
-if [ -d /usr/share/dbus-1/system-services ]; then
-  cat > /usr/share/dbus-1/system-services/org.bluez.service << 'SVCEOF'
-[D-BUS Service]
-Name=org.bluez
-Exec=/usr/local/bin/qemu-hw-bridge --dbus-stub
-User=root
-SVCEOF
-fi
-
-# AirPlay on Midi/Station 3 needs the packaged Avahi D-Bus policy on disk.
-case "$BOARD" in
-  cucumber|orion)
-    AP_POLICY=$(ls /data/yam/pkgs/station/airplay/*/share/luna/plugins/station.airplay/config/avahi-dbus.conf 2>/dev/null | head -n 1 || true)
-    if [ -n "$AP_POLICY" ]; then
-      mkdir -p /etc/dbus-1/system.d
-      cp -f "$AP_POLICY" /etc/dbus-1/system.d/avahi-dbus.conf 2>/dev/null || true
-    fi
-    ;;
-esac
-
-# Station 3 (orion): the firmware dbus build faults on this kernel, so start the
-# packaged ARMhf dbus-daemon from the installed AirPlay package when available;
-# on all other boards that ship /usr/bin/dbus-daemon, start `dbus-daemon --system --fork`.
-if [ "$MODE" = "full" ]; then
-  if [ "$BOARD" = "orion" ]; then
-    AP=$(ls -d /data/yam/pkgs/station/airplay/*/share/luna/plugins/station.airplay 2>/dev/null | head -n 1 || true)
-    if [ -n "$AP" ] && [ -x "$AP/bin/dbus-daemon" ] && [ -x "$AP/lib/ld-linux-armhf.so.3" ]; then
-      if ! pidof dbus-daemon >/dev/null 2>&1; then
-        rm -f /run/dbus/pid 2>/dev/null || true
-        "$AP/lib/ld-linux-armhf.so.3" --library-path "$AP/lib" "$AP/bin/dbus-daemon" \
-          --config-file=/tmp/kuyase-bus.conf --fork >/tmp/dbus.log 2>&1 || true
-      fi
-    fi
-  elif [ -x /usr/bin/dbus-daemon ]; then
-    if ! pidof dbus-daemon >/dev/null 2>&1; then
-      rm -f /run/dbus/pid 2>/dev/null || true
-      dbus-daemon --system --fork >/tmp/dbus.log 2>&1 || \
-        dbus-daemon --config-file=/tmp/kuyase-bus.conf --fork >/tmp/dbus.log 2>&1 || true
-    fi
-  fi
-fi
-
-# 9. Start Virtual Speaker Twin & Hardware Bridge (:8091) and register D-Bus org.bluez/org.bluealsa stub
-# In Stub Mode, bind-mount `qemu-hw-bridge` over `/system/vendor/quasar/quasar_launcher2`
-# so unmodified `/system/vendor/quasar/q` (`start`, `stop`, `restart`, `backend-dev`, `backend-prod`)
-# manages the lightweight supervisor stub without launching the conflicting `maind` monolith.
-if [ "$MODE" != "full" ] && [ -e /system/vendor/quasar/quasar_launcher2 ]; then
-  rm -f /tmp/loop_capture_pcm 2>/dev/null || true
-  mount --bind /usr/local/bin/qemu-hw-bridge /system/vendor/quasar/quasar_launcher2 2>/dev/null || true
-fi
+# 8b. Start Virtual Speaker Twin & Hardware Bridge (:8091).
+# `qemu-hw-bridge` (`runtime_env::prepare_runtime_environment` + `dbus_stub`) is the single
+# source of truth for:
+#   - unified `/var/run -> /run` and `04750` `0:85` `dbus-daemon-launch-helper` permissions,
+#   - permissive D-Bus system bus config (`/tmp/kuyase-bus.conf`), `org.bluez.service` bind-mount,
+#     `dbus-daemon --system` startup, and the pure-Rust `org.bluez`/`org.bluealsa` responder (`Full Mode`),
+#   - unified `maind.log` symlinks, Linkplay `fnvram` (`EMU0001`), SDIO/pcba_ids sysfs defaults,
+#     `quasar.cfg` `devConfig`, fallback `set_volume.sh`, virtual `wlan0`, and `quasar_launcher2`
+#     lifecycle supervisor (`Stub Mode`).
 set -m
 /usr/local/bin/qemu-hw-bridge </dev/null >/tmp/hw-bridge.log 2>&1 &
 set +m
