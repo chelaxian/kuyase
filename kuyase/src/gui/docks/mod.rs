@@ -94,6 +94,16 @@ pub fn render_gnome_action_cards(ui: &mut egui::Ui, app: &mut GuiAppState) {
         });
 }
 
+pub fn vm_connection_banner_subtitle(board_slug: &str, vm_running: bool) -> String {
+    if vm_running {
+        "Пожалуйста, подождите 5-10 секунд, пока загрузится гостевое ядро Linux и поднимется демон qemu-hw-bridge.".to_string()
+    } else if protocol::normalize_board_slug(board_slug) == "yandexmini" {
+        "Нажмите кнопку ниже, чтобы запустить образ в QEMU и подключить реальное выполнение команд TTS, ToF (VL53L0X), кнопок и дисплея.".to_string()
+    } else {
+        "Нажмите кнопку ниже, чтобы запустить образ в QEMU и подключить реальное выполнение команд TTS, датчиков среды, кнопок и дисплея.".to_string()
+    }
+}
+
 fn render_vm_connection_banner(ui: &mut egui::Ui, app: &mut GuiAppState) {
     let vm_running = app.session.is_some();
     let bridge_online = app
@@ -106,7 +116,8 @@ fn render_vm_connection_banner(ui: &mut egui::Ui, app: &mut GuiAppState) {
     }
 
     let busy = app.bg_task_running.load(Ordering::Relaxed);
-    let (bg, border, title, sub) = if vm_running {
+    let sub = vm_connection_banner_subtitle(&app.config.selected_board, vm_running);
+    let (bg, border, title) = if vm_running {
         (
             Color32::from_rgb(48, 42, 22),
             Color32::from_rgb(229, 165, 10),
@@ -114,7 +125,6 @@ fn render_vm_connection_banner(ui: &mut egui::Ui, app: &mut GuiAppState) {
                 "Загрузка образа '{}' в QEMU и ожидание моста :{}...",
                 app.config.selected_board, app.config.bridge_port
             ),
-            "Пожалуйста, подождите 5-10 секунд, пока загрузится гостевое ядро Linux и поднимется демон qemu-hw-bridge.".to_string(),
         )
     } else {
         (
@@ -124,7 +134,6 @@ fn render_vm_connection_banner(ui: &mut egui::Ui, app: &mut GuiAppState) {
                 "Виртуальная колонка '{}' сейчас не запущена (режим предпросмотра макета)",
                 app.config.selected_board
             ),
-            "Нажмите кнопку ниже, чтобы запустить образ в QEMU и подключить реальное выполнение команд TTS, ToF, кнопок и дисплея.".to_string(),
         )
     };
 
@@ -222,5 +231,23 @@ mod tests {
 
         let after_1680 = now + Duration::from_millis(1680);
         assert_eq!(compute_hijack_window_remaining_ms(Some(now), after_1680), 0);
+    }
+
+    #[test]
+    fn test_vm_connection_banner_subtitle_tof_only_for_yandexmini() {
+        assert_eq!(protocol::BOARD_CATALOG.len(), 13);
+        for b in protocol::BOARD_CATALOG {
+            let sub = vm_connection_banner_subtitle(b.slug, false);
+            let has_tof = sub.contains("ToF") || sub.contains("VL53L0X");
+            if b.slug == "yandexmini" {
+                assert!(has_tof, "yandexmini banner must mention ToF: {}", sub);
+            } else {
+                assert!(
+                    !has_tof,
+                    "board '{}' banner must NOT mention ToF or VL53L0X: {}",
+                    b.slug, sub
+                );
+            }
+        }
     }
 }

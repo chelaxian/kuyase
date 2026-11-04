@@ -133,13 +133,20 @@ pub fn render_bottom_dock(ui: &mut egui::Ui, app: &mut GuiAppState) {
         if !app.config.dock_collapsed {
             ui.separator();
             if app.config.active_terminal_tab == "signals" {
-                for (flt, title) in [
-                    (SignalFilter::All, "Все"),
-                    (SignalFilter::TofButtons, "ToF / Кнопки"),
-                    (SignalFilter::TtsIpc, "TTS / IPC"),
-                    (SignalFilter::LedDisplay, "LED / Экран"),
-                    (SignalFilter::Audio, "Аудио"),
+                let board_slug = app
+                    .latest_state
+                    .as_ref()
+                    .map(|s| s.board_slug.clone())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| app.config.selected_board.clone());
+                for flt in [
+                    SignalFilter::All,
+                    SignalFilter::TofButtons,
+                    SignalFilter::TtsIpc,
+                    SignalFilter::LedDisplay,
+                    SignalFilter::Audio,
                 ] {
+                    let title = crate::gui::signal_log::signal_filter_tab_label(flt, &board_slug);
                     if ui
                         .selectable_label(app.signal_filter == flt, title)
                         .clicked()
@@ -235,6 +242,12 @@ pub fn render_bottom_dock(ui: &mut egui::Ui, app: &mut GuiAppState) {
 }
 
 fn render_signal_log_tab(ui: &mut egui::Ui, app: &mut GuiAppState) {
+    let board_slug = app
+        .latest_state
+        .as_ref()
+        .map(|s| s.board_slug.clone())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| app.config.selected_board.clone());
     let entries = app.filtered_signals();
     let avail_h = ui.available_height().max(60.0);
 
@@ -264,7 +277,7 @@ fn render_signal_log_tab(ui: &mut egui::Ui, app: &mut GuiAppState) {
                                 "[{}] [{} {}] {}",
                                 entry.timestamp,
                                 entry.direction.as_str(),
-                                entry.category.as_str(),
+                                entry.category.as_str_for_board(&board_slug),
                                 strip_ansi_and_control_chars(&entry.message)
                             );
                             ui.add(

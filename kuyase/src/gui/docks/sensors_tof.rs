@@ -3,6 +3,34 @@ use crate::gui::state::GuiAppState;
 use eframe::egui::{self, Color32, RichText};
 use protocol::HostCommand;
 
+pub fn sensors_card_headers(board_slug: &str) -> (&'static str, &'static str) {
+    let norm = protocol::normalize_board_slug(board_slug);
+    let desc = protocol::find_board_descriptor(&norm);
+    let is_sn3236 = desc
+        .map(|d| d.ring_driver == "i2c_sn3236")
+        .unwrap_or(norm == "yandexmini");
+    let has_ultrasound = desc
+        .map(|d| d.has_ultrasound)
+        .unwrap_or(norm == "orion");
+
+    if is_sn3236 {
+        (
+            "2. Лазерный дальномер ToF (VL53L0X) и датчики среды",
+            "Оптический датчик жестов руки VL53L0X (Яндекс Станция Мини 1), освещённость ALS и температура SoC",
+        )
+    } else if has_ultrasound {
+        (
+            "2. Ультразвуковой тракт (38.4 кГц), освещённость ALS и датчики",
+            "Дистанция акустического отражения для pcm.ultrasound (96 кГц / 38.4 кГц), датчик света light-sensor-top и температура SoC",
+        )
+    } else {
+        (
+            "2. Датчики среды (ALS, температура SoC) и световое кольцо",
+            "Датчик внешней освещённости ltr308als01 (IIO), температура SoC и управление Световым кольцом (LED Ring)",
+        )
+    }
+}
+
 pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
     let board_slug = app
         .latest_state
@@ -18,22 +46,7 @@ pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
         .map(|d| d.has_ultrasound)
         .unwrap_or(board_slug == "orion");
 
-    let (card_title, card_subtitle) = if is_sn3236 {
-        (
-            "2. Лазерный дальномер ToF (VL53L0X) и датчики среды",
-            "Оптический датчик жестов руки VL53L0X (устанавливался только в Станцию Мини 1), освещённость ALS и температура SoC",
-        )
-    } else if has_ultrasound {
-        (
-            "2. Ультразвуковой тракт (38.4 кГц), освещённость ALS и датчики",
-            "Дистанция акустического отражения для pcm.ultrasound (96 кГц / 38.4 кГц), датчик света light-sensor-top и температура SoC",
-        )
-    } else {
-        (
-            "2. Датчики среды (ALS, температура SoC) и световое кольцо",
-            "Датчик внешней освещённости ltr308als01 (IIO), температура SoC и управление кольцом LED (оптического датчика VL53L0X на этой модели нет)",
-        )
-    };
+    let (card_title, card_subtitle) = sensors_card_headers(&board_slug);
 
     gnome_preferences_group(ui, card_title, card_subtitle, |ui| {
         if is_sn3236 {
@@ -232,4 +245,34 @@ pub fn render_tof_and_sensors_card(ui: &mut egui::Ui, app: &mut GuiAppState) {
             },
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sensors_card_headers_tof_only_for_yandexmini() {
+        assert_eq!(protocol::BOARD_CATALOG.len(), 13);
+        for b in protocol::BOARD_CATALOG {
+            let (title, subtitle) = sensors_card_headers(b.slug);
+            let has_tof = title.contains("ToF")
+                || title.contains("VL53L0X")
+                || subtitle.contains("ToF")
+                || subtitle.contains("VL53L0X");
+            if b.slug == "yandexmini" {
+                assert!(
+                    has_tof,
+                    "yandexmini headers must mention ToF / VL53L0X: {:?} / {:?}",
+                    title, subtitle
+                );
+            } else {
+                assert!(
+                    !has_tof,
+                    "board '{}' headers must NOT mention ToF or VL53L0X: {:?} / {:?}",
+                    b.slug, title, subtitle
+                );
+            }
+        }
+    }
 }
