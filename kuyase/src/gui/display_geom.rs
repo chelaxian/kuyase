@@ -48,6 +48,28 @@ pub struct CircleEnclosureLayout {
     pub action_hit_r: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct MangoEnclosureLayout {
+    pub body_center: Pos2,
+    pub doa_r: f32,
+    pub body_rect: Rect,
+    pub strap_rect: Rect,
+    pub ctrl_center: Pos2,
+    pub ctrl_rect: Rect,
+    pub bt_pos: Pos2,
+    pub minus_pos: Pos2,
+    pub action_pos: Pos2,
+    pub plus_pos: Pos2,
+    pub next_pos: Pos2,
+    pub side_center: Pos2,
+    pub side_rect: Rect,
+    pub mute_pos: Pos2,
+    pub power_pos: Pos2,
+    pub batt_led_positions: [Pos2; 4],
+    pub usbc_pos: Pos2,
+    pub usbc_rect: Rect,
+}
+
 pub fn board_enclosure_shape(slug: &str) -> EnclosureShape {
     match protocol::normalize_board_slug(slug).as_str() {
         "cucumber" | "orion" | "saturn" => EnclosureShape::SquircleCube,
@@ -91,6 +113,60 @@ pub fn circle_enclosure_layout(board_slug: &str, rect: Rect) -> CircleEnclosureL
         center_logo_r,
         button_hit_r,
         action_hit_r,
+    }
+}
+
+pub fn mango_enclosure_layout(rect: Rect) -> MangoEnclosureLayout {
+    let center = rect.center();
+    let body_center = Pos2::new(center.x, center.y - 4.0);
+    let doa_r = (rect.height().min(rect.width()) * 0.43).clamp(88.0, 102.0);
+    let body_rect = Rect::from_center_size(body_center, eframe::egui::Vec2::new(244.0, 114.0));
+    let strap_rect = Rect::from_center_size(
+        Pos2::new(body_rect.right() + 6.0, body_center.y + 10.0),
+        eframe::egui::Vec2::new(18.0, 34.0),
+    );
+
+    let ctrl_center = Pos2::new(body_center.x, body_center.y - 21.0);
+    let ctrl_rect = Rect::from_center_size(ctrl_center, eframe::egui::Vec2::new(196.0, 44.0));
+    let bt_pos = Pos2::new(ctrl_center.x - 74.0, ctrl_center.y);
+    let minus_pos = Pos2::new(ctrl_center.x - 42.0, ctrl_center.y);
+    let action_pos = ctrl_center;
+    let plus_pos = Pos2::new(ctrl_center.x + 42.0, ctrl_center.y);
+    let next_pos = Pos2::new(ctrl_center.x + 74.0, ctrl_center.y);
+
+    let side_center = Pos2::new(body_center.x, body_center.y + 26.0);
+    let side_rect = Rect::from_center_size(side_center, eframe::egui::Vec2::new(196.0, 32.0));
+    let mute_pos = Pos2::new(side_center.x - 72.0, side_center.y);
+    let power_pos = Pos2::new(side_center.x - 46.0, side_center.y);
+    let batt_start_x = side_center.x - 16.0;
+    let batt_led_positions = [
+        Pos2::new(batt_start_x, side_center.y),
+        Pos2::new(batt_start_x + 13.5, side_center.y),
+        Pos2::new(batt_start_x + 27.0, side_center.y),
+        Pos2::new(batt_start_x + 40.5, side_center.y),
+    ];
+    let usbc_pos = Pos2::new(side_center.x + 64.0, side_center.y);
+    let usbc_rect = Rect::from_center_size(usbc_pos, eframe::egui::Vec2::new(22.0, 10.0));
+
+    MangoEnclosureLayout {
+        body_center,
+        doa_r,
+        body_rect,
+        strap_rect,
+        ctrl_center,
+        ctrl_rect,
+        bt_pos,
+        minus_pos,
+        action_pos,
+        plus_pos,
+        next_pos,
+        side_center,
+        side_rect,
+        mute_pos,
+        power_pos,
+        batt_led_positions,
+        usbc_pos,
+        usbc_rect,
     }
 }
 
@@ -150,14 +226,12 @@ pub fn enclosure_button_targets(board_slug: &str, rect: Rect) -> Vec<(&'static s
             ]
         }
         EnclosureShape::CylinderPortable => {
-            let body_center = Pos2::new(c.x, c.y - 6.0);
-            let ctrl_center = Pos2::new(body_center.x, body_center.y - 21.0);
-            let side_center = Pos2::new(body_center.x, body_center.y + 27.0);
+            let m = mango_enclosure_layout(rect);
             vec![
-                ("action", ctrl_center, 16.0),
-                ("volume_down", Pos2::new(ctrl_center.x - 42.0, ctrl_center.y), 13.0),
-                ("volume_up", Pos2::new(ctrl_center.x + 42.0, ctrl_center.y), 13.0),
-                ("mute", Pos2::new(side_center.x - 72.0, side_center.y), 12.0),
+                ("action", m.action_pos, 16.0),
+                ("volume_down", m.minus_pos, 13.0),
+                ("volume_up", m.plus_pos, 13.0),
+                ("mute", m.mute_pos, 12.0),
             ]
         }
     }
@@ -176,6 +250,40 @@ pub fn hit_test_enclosure_target(
     pointer: Pos2,
 ) -> Option<EnclosureHitTarget> {
     if !rect.contains(pointer) {
+        return None;
+    }
+
+    let norm = protocol::normalize_board_slug(board_slug);
+    if board_enclosure_shape(&norm) == EnclosureShape::CylinderPortable {
+        let m = mango_enclosure_layout(rect);
+        if pointer.distance(m.bt_pos) <= 13.0 {
+            return Some(EnclosureHitTarget::MangoBluetooth);
+        }
+        if pointer.distance(m.minus_pos) <= 13.0 {
+            return Some(EnclosureHitTarget::Button("volume_down"));
+        }
+        if pointer.distance(m.action_pos) <= 16.0 {
+            return Some(EnclosureHitTarget::Button("action"));
+        }
+        if pointer.distance(m.plus_pos) <= 13.0 {
+            return Some(EnclosureHitTarget::Button("volume_up"));
+        }
+        if pointer.distance(m.next_pos) <= 13.0 {
+            return Some(EnclosureHitTarget::MangoNextTrack);
+        }
+        if pointer.distance(m.mute_pos) <= 12.0 {
+            return Some(EnclosureHitTarget::Button("mute"));
+        }
+        if m.usbc_rect.expand(4.0).contains(pointer) || pointer.distance(m.usbc_pos) <= 12.0 {
+            return Some(EnclosureHitTarget::MangoUsbCPd);
+        }
+        let dist = pointer.distance(m.body_center);
+        if dist >= m.doa_r - 12.0 && dist <= m.doa_r + 14.0 {
+            return Some(EnclosureHitTarget::DoaAzimuth(doa_angle_from_pointer(
+                m.body_center,
+                pointer,
+            )));
+        }
         return None;
     }
 
@@ -258,15 +366,15 @@ pub fn enclosure_inspector_text(
             other, other, press_mode
         ),
         Some(EnclosureHitTarget::MangoBluetooth) => {
-            "Кнопка Bluetooth (mango) | ЛКМ: переключить паттерн bluetooth_playing (/dev/fb1)"
+            "Кнопка Bluetooth [BT] (mango, AW21012 /dev/fb1) | ЛКМ: переключить паттерн bluetooth_playing"
                 .to_string()
         }
         Some(EnclosureHitTarget::MangoNextTrack) => {
-            "Кнопка следующего трека «>|» (mango) | ЛКМ: остановить TTS / переключить трек (uinput)"
+            "Кнопка следующего трека «>|» (mango) | ЛКМ: остановить TTS (stop_tts) / переключить трек (uinput)"
                 .to_string()
         }
         Some(EnclosureHitTarget::MangoUsbCPd) => {
-            "Разъём USB-C PD (IP2366 /sys/devices/virtual/ip2366_cls/ip2366_charger) | ЛКМ: переключить PD 12 В"
+            "Разъём USB-C PD (IP2366 PD + CW2217 АКБ, шкала AW9110 /dev/fb0) | ЛКМ: переключить зарядку PD 12 В ↔ АКБ"
                 .to_string()
         }
         None => match norm.as_str() {
@@ -284,6 +392,10 @@ pub fn enclosure_inspector_text(
             ),
             "yandexmicro" | "plum" | "plumnc" => format!(
                 "DOA {}° | Кластер 3 LED (sysfs) | Кнопки [Action] [Mute] [−] [+]: ЛКМ ({}) | Обод: DOA",
+                st.doa_angle, press_mode
+            ),
+            "mango" => format!(
+                "DOA {}° | АКБ 4 LED (AW9110 /dev/fb0, CW2217) + oknix 3 LED (AW21012 /dev/fb1) | [BT] [−] [Action] [+] [>|] [Mute] [USB-C PD (IP2366)]: ЛКМ ({})",
                 st.doa_angle, press_mode
             ),
             _ => format!(
@@ -797,5 +909,97 @@ mod tests {
         let idle_mat = matrix_inspector_text(None, &px, 180);
         assert!(idle_mat.contains("21×12"));
         assert!(idle_mat.contains("PWM: 180"));
+    }
+
+    #[test]
+    fn test_mango_cylinder_portable_hit_testing_and_inspector() {
+        let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(320.0, 232.0));
+        let m = mango_enclosure_layout(rect);
+        assert_eq!(board_enclosure_shape("mango"), EnclosureShape::CylinderPortable);
+
+        assert_eq!(
+            hit_test_enclosure_target("mango", rect, m.bt_pos),
+            Some(EnclosureHitTarget::MangoBluetooth)
+        );
+        assert_eq!(
+            hit_test_enclosure_target("mango", rect, m.minus_pos),
+            Some(EnclosureHitTarget::Button("volume_down"))
+        );
+        assert_eq!(
+            hit_test_enclosure_target("mango", rect, m.action_pos),
+            Some(EnclosureHitTarget::Button("action"))
+        );
+        assert_eq!(
+            hit_test_enclosure_target("mango", rect, m.plus_pos),
+            Some(EnclosureHitTarget::Button("volume_up"))
+        );
+        assert_eq!(
+            hit_test_enclosure_target("mango", rect, m.next_pos),
+            Some(EnclosureHitTarget::MangoNextTrack)
+        );
+        assert_eq!(
+            hit_test_enclosure_target("mango", rect, m.mute_pos),
+            Some(EnclosureHitTarget::Button("mute"))
+        );
+        assert_eq!(
+            hit_test_enclosure_target("mango", rect, m.usbc_pos),
+            Some(EnclosureHitTarget::MangoUsbCPd)
+        );
+        assert_eq!(hit_test_enclosure_target("mango", rect, m.power_pos), None);
+
+        let top_doa = Pos2::new(m.body_center.x, m.body_center.y - m.doa_r);
+        let right_doa = Pos2::new(m.body_center.x + m.doa_r, m.body_center.y);
+        assert_eq!(
+            hit_test_enclosure_target("mango", rect, top_doa),
+            Some(EnclosureHitTarget::DoaAzimuth(0))
+        );
+        assert_eq!(
+            hit_test_enclosure_target("mango", rect, right_doa),
+            Some(EnclosureHitTarget::DoaAzimuth(90))
+        );
+
+        let mut st = BridgeStateSnapshot::default();
+        st.doa_angle = 45;
+        st.volume_level = 7;
+
+        let rest = enclosure_inspector_text("mango", &st, None, "single");
+        assert!(rest.contains("AW9110") && rest.contains("AW21012") && rest.contains("IP2366") && rest.contains("CW2217"));
+        assert!(!rest.contains("ToF"));
+
+        let bt_txt = enclosure_inspector_text(
+            "mango",
+            &st,
+            Some(EnclosureHitTarget::MangoBluetooth),
+            "single",
+        );
+        assert!(bt_txt.contains("AW21012") && bt_txt.contains("bluetooth_playing"));
+
+        let act_txt = enclosure_inspector_text(
+            "mango",
+            &st,
+            Some(EnclosureHitTarget::Button("action")),
+            "single",
+        );
+        assert!(act_txt.contains("AW21012") && act_txt.contains("/dev/fb1") && act_txt.contains("uinput"));
+
+        let next_txt = enclosure_inspector_text(
+            "mango",
+            &st,
+            Some(EnclosureHitTarget::MangoNextTrack),
+            "single",
+        );
+        assert!(next_txt.contains("uinput"));
+
+        let usbc_txt = enclosure_inspector_text(
+            "mango",
+            &st,
+            Some(EnclosureHitTarget::MangoUsbCPd),
+            "single",
+        );
+        assert!(
+            usbc_txt.contains("IP2366")
+                && usbc_txt.contains("CW2217")
+                && usbc_txt.contains("AW9110")
+        );
     }
 }

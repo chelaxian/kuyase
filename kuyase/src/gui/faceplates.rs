@@ -1,4 +1,4 @@
-use crate::gui::canvas::draw_circular_oknix_logo;
+use crate::gui::canvas::{draw_circular_oknix_logo, draw_ring_led};
 use crate::gui::display_geom::{
     build_local_segments_from_text, clock_inspector_text, clock_segment_lines,
     clock_special_positions, hit_test_clock_segment, hit_test_matrix_pixel, matrix_inspector_text,
@@ -356,6 +356,61 @@ pub fn render_aux_logo_strip(
     board_slug: &str,
     st: &BridgeStateSnapshot,
 ) {
+    if board_slug == "mango" {
+        let batt_desc = "4-LED линейная шкала заряда АКБ на боковой панели Яндекс Станции Стрит (mango):\n\
+             • Аппаратный драйвер: Awinic AW9110 + фреймбуфер /dev/fb0 (name=\"ring\", 12 байт RGB24)\n\
+             • Поканальное управление: /sys/class/leds/mango:{red,green,blue}:ring{1..4}/brightness\n\
+             • Штатные паттерны: /system/vendor/quasar/ledpatterns/battery/*.led";
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new("Шкала АКБ (/dev/fb0, 4 LED): (?)")
+                    .small()
+                    .strong()
+                    .color(Color32::from_rgb(160, 185, 215)),
+            )
+            .on_hover_text(batt_desc);
+
+            let (brect, _bresp) = ui.allocate_exact_size(Vec2::new(72.0, 22.0), Sense::hover());
+            let bp = ui.painter_at(brect);
+            bp.rect_filled(brect, 11.0, Color32::from_rgb(15, 18, 24));
+            bp.rect_stroke(brect, 11.0, Stroke::new(1.0, Color32::from_rgb(50, 58, 72)));
+            for idx in 0..4 {
+                let default_batt = if idx < 3 {
+                    [215, 232, 255]
+                } else {
+                    [0, 0, 0]
+                };
+                let rgb = st.ring_pixels.get(idx).copied().unwrap_or(default_batt);
+                let x = brect.left() + 12.0 + (idx as f32) * 16.0;
+                draw_ring_led(&bp, Pos2::new(x, brect.center().y), 3.8, rgb);
+            }
+
+            for (lbl, lit) in [("4/4", 4usize), ("3/4", 3usize), ("1/4", 1usize), ("0/4", 0usize)] {
+                if ui
+                    .small_button(lbl)
+                    .on_hover_text(format!("Зажечь {} из 4 светодиодов шкалы заряда (/dev/fb0)", lit))
+                    .clicked()
+                {
+                    let mut px = vec![[0u8, 0, 0]; 4];
+                    for item in px.iter_mut().take(lit) {
+                        *item = [235, 245, 255];
+                    }
+                    let latest = app.latest_state.get_or_insert_with(|| st.clone());
+                    latest.ring_pixels = px;
+                    if app.session.is_some() {
+                        app.send_serial_command(&format!(
+                            "for i in 1 2 3 4; do echo none > /sys/class/leds/mango:red:ring$i/trigger; \
+                             v=0; [ $i -le {lit} ] && v=255; \
+                             for c in red green blue; do echo $v > /sys/class/leds/mango:$c:ring$i/brightness; done; done"
+                        ));
+                    }
+                }
+            }
+        });
+        ui.add_space(2.0);
+    }
+
     if st.aux_light_kind == "logo" || matches!(board_slug, "cucumber" | "pickle" | "mango") {
         let count = if !st.logo_pixels.is_empty() {
             st.logo_pixels.len()
